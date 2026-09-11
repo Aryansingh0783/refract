@@ -3,10 +3,17 @@ const { spawn } = require('child_process');
 const path = require('path');
 const readline = require('readline');
 
+// In a packaged build the script lives in app.asar.unpacked (see build.asarUnpack):
+// powershell.exe is a separate process and cannot read files inside app.asar.
+function unpackedPath(p, exists = require('fs').existsSync) {
+  const u = p.replace(/([\\/])app\.asar([\\/])/, '$1app.asar.unpacked$2');
+  return u !== p && exists(u) ? u : p;
+}
+
 // Thin JSON-lines client for scripts/winhelper.ps1 (started once, reused).
 class WinHelper {
   constructor(scriptPath) {
-    this.scriptPath = scriptPath || path.join(__dirname, '..', '..', 'scripts', 'winhelper.ps1');
+    this.scriptPath = unpackedPath(scriptPath || path.join(__dirname, '..', '..', 'scripts', 'winhelper.ps1'));
     this.proc = null;
     this.pending = new Map();
     this.seq = 0;
@@ -64,4 +71,4 @@ class WinHelper {
   stop() { if (this.proc) { try { this.proc.stdin.end(); this.proc.kill(); } catch {} } }
 }
 
-module.exports = { WinHelper };
+module.exports = { WinHelper, unpackedPath };

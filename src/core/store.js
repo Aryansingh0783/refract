@@ -10,8 +10,11 @@ const DEFAULTS = {
   looks: defaults(),    // shader parameter values
   startLook: 'default',
   transition: 0.6,
-  overlay: { hotkey: 'Alt+Shift+R', x: null, y: null },
-  lookHotkeys: { default: 'Alt+Shift+1', cinematic: 'Alt+Shift+2', natural: 'Alt+Shift+3' },
+  // Not Alt+Shift: that is Windows' keyboard-language switch and swallows the combo on any PC
+  // with two input languages installed.
+  overlay: { hotkey: 'Ctrl+Alt+R', x: null, y: null, pinned: false },
+  lookHotkeys: { default: 'Ctrl+Alt+1', cinematic: 'Ctrl+Alt+2', natural: 'Ctrl+Alt+3' },
+  onboarded: false,
   ambientMotion: true,
   reducedTransparency: false,
   feederPayloadDir: null,
@@ -27,6 +30,11 @@ class Store {
       this.data = { ...this.data, ...saved, looks: { ...this.data.looks, ...(saved.looks || {}) },
         overlay: { ...this.data.overlay, ...(saved.overlay || {}) },
         lookHotkeys: { ...this.data.lookHotkeys, ...(saved.lookHotkeys || {}) } };
+      // Move anyone still on the old Alt+Shift defaults to the new ones.
+      if (this.data.overlay.hotkey === 'Alt+Shift+R') this.data.overlay.hotkey = DEFAULTS.overlay.hotkey;
+      for (const [k, v] of Object.entries(this.data.lookHotkeys)) {
+        if (v === `Alt+Shift+${{ default: 1, cinematic: 2, natural: 3 }[k]}`) this.data.lookHotkeys[k] = DEFAULTS.lookHotkeys[k];
+      }
     } catch {}
   }
   get() { return this.data; }
@@ -41,4 +49,5 @@ class Store {
   }
 }
 
+Store.DEFAULTS = DEFAULTS;
 module.exports = { Store, DEFAULTS };

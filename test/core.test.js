@@ -122,3 +122,42 @@ test('pe version reader handles non-PE input', () => {
   fs.writeFileSync(f, 'hello');
   assert.strictEqual(getFileVersion(f), null);
 });
+
+test('library uses the ReShade.ini next to the exe, never a backup copy', async () => {
+  const library = require('../src/core/library');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-lib-'));
+  const bin = path.join(root, 'bin', 'x64_dx12');
+  const bak = path.join(root, '_DLSS5_Backup', 'originals', 'x', 'bin', 'x64_dx12');
+  for (const d of [bin, bak]) fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'game.exe'), Buffer.alloc(2048));
+  fs.writeFileSync(path.join(bin, 'ReShade.ini'), '[GENERAL]\r\n');
+  fs.writeFileSync(path.join(bak, 'ReShade.ini'), '[GENERAL]\r\n');
+  fs.writeFileSync(path.join(bak, 'nvngx_dlss.dll'), 'stale');
+  fs.writeFileSync(path.join(bak, 'witcher3.exe'), Buffer.alloc(9000));
+  const g = await library.inspect({ id: 't', name: 'T', dir: root });
+  assert.strictEqual(g.exe, path.join(bin, 'game.exe'));
+  assert.strictEqual(g.reshadeIni, path.join(bin, 'ReShade.ini'));
+  assert.deepStrictEqual(g.dlls, []);
+});
+
+test('removeAll strips Refract from the live ini, keeps newer settings, drops stale backups', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-rm-'));
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-rm-other-'));
+  const rini = path.join(dir, 'ReShade.ini');
+  fs.writeFileSync(rini, '[GENERAL]\r\nEffectSearchPaths=.\\reshade-shaders\\Shaders\\**,.\\refract-shaders\\\r\nPresetPath=.\\ReShadePreset.ini\r\n\r\n[RenoDX.DLSS5]\r\nNRPreset=3\r\n');
+  fs.writeFileSync(rini + '.refract-backup', '[GENERAL]\r\nEffectSearchPaths=.\\refract-shaders\\\r\n');
+  fs.writeFileSync(path.join(dir, 'ReShadePreset.ini'), 'Techniques=SMAA@SMAA.fx,Refract@Refract.fx\r\n\r\n[Refract.fx]\r\nRefractStartLook=1\r\n');
+  fs.writeFileSync(path.join(dir, 'ReShadePreset.ini.refract-backup'), 'stale');
+  const done = await reshade.removeAll(dir, path.join(other, 'ReShade.ini'));
+  assert.ok(done.includes('looks'));
+  const after = fs.readFileSync(rini, 'utf8');
+  assert.doesNotMatch(after, /refract-shaders/);
+  assert.match(after, /reshade-shaders\\Shaders/);
+  assert.match(after, /\[RenoDX\.DLSS5\]\r\nNRPreset=3/);
+  const preset = fs.readFileSync(path.join(dir, 'ReShadePreset.ini'), 'utf8');
+  assert.doesNotMatch(preset, /Refract/);
+  assert.match(preset, /Techniques=SMAA@SMAA\.fx/);
+  assert.ok(!fs.existsSync(rini + '.refract-backup'));
+  assert.ok(!fs.existsSync(path.join(dir, 'ReShadePreset.ini.refract-backup')));
+  assert.ok(!fs.existsSync(path.join(other, 'ReShadePreset.ini')), 'never creates files elsewhere');
+});

@@ -32,7 +32,8 @@
 <div class="grain" aria-hidden="true"></div>
 
 <div class="app">
-  <header class="titlebar"><span class="session" id="session" hidden><span class="breath" aria-hidden="true"></span><span id="sessionText"></span></span></header>
+  <header class="titlebar"><span class="session" id="session" hidden><span class="breath" aria-hidden="true"></span><span id="sessionText"></span>
+    <button class="session-x" id="sessionEnd" aria-label="Mark the game as closed" title="Game already closed? Clear this."><i class="ph ph-x"></i></button></span></header>
 
   <!-- GL-12 + GL-04: glass dock with MO-27 sliding indicator -->
   <nav class="dock glass" aria-label="Sections">
@@ -63,6 +64,7 @@
         </div>
         <button class="icon-btn" id="addFolder" aria-label="Add a game folder" title="Add a game folder"><i class="ph ph-folder-plus" aria-hidden="true"></i></button>
         <button class="icon-btn" id="rescan" aria-label="Rescan library" title="Rescan"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i></button>
+        <button class="icon-btn" id="help" aria-label="How Refract works" title="How Refract works"><i class="ph ph-question" aria-hidden="true"></i></button>
       </div>
       <div class="shelf fade-x" id="shelf" role="listbox" aria-label="Games"></div>
     </section>
@@ -137,7 +139,7 @@
           <div class="field"><label for="hkDefault">Default look</label><div class="glass-in"><i class="ph ph-circle" aria-hidden="true"></i><input id="hkDefault" class="mono"></div></div>
           <div class="field"><label for="hkCinematic">Cinematic look</label><div class="glass-in"><i class="ph ph-film-strip" aria-hidden="true"></i><input id="hkCinematic" class="mono"></div></div>
           <div class="field"><label for="hkNatural">Natural Lighting look</label><div class="glass-in"><i class="ph ph-sun-horizon" aria-hidden="true"></i><input id="hkNatural" class="mono"></div>
-            <span class="help">Accelerator format, for example Alt+Shift+2.</span><span class="err" id="hkErr" hidden></span></div>
+            <span class="help">Accelerator format, for example Ctrl+Alt+2. Avoid Alt+Shift: Windows uses it to switch keyboard language.</span><span class="err" id="hkErr" hidden></span></div>
           <button class="btn glassy" id="saveHotkeys">Save hotkeys</button>
         </div>
         <div class="glass pane">
@@ -148,10 +150,32 @@
             <button class="toggle" id="tgRT" role="switch" aria-checked="false" aria-label="Reduce transparency"><i></i></button></div>
           <div class="card-h"><h3>Driver</h3></div>
           <dl class="kv" id="driverKv"></dl>
+          <div class="card-h"><h3>Undo</h3></div>
+          <div class="trow"><div><b>Restore every game</b><small>Removes everything Refract added to any game: DLSS 5, ReShade, looks, swapped DLLs. Uninstalling Refract offers the same.</small></div>
+            <button class="btn ghost sm" id="restoreEverything"><i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i><span>Restore all</span></button></div>
+          <button class="btn ghost sm" id="openGuide"><i class="ph ph-question" aria-hidden="true"></i>Show the quick guide</button>
         </div>
       </div>
     </section>
   </main>
+  <!-- First-run guide (re-open with the ? button) -->
+  <div class="sheet" id="welcome" hidden role="dialog" aria-modal="true" aria-labelledby="welcomeTitle">
+    <div class="sheet-card glass strong refract">
+      <header class="sheet-head">
+        <span class="mark" aria-hidden="true"></span>
+        <div><h2 id="welcomeTitle">Welcome to Refract</h2><p class="lede">DLSS 5 for your games in four steps. Everything is reversible.</p></div>
+      </header>
+      <ol class="guide">
+        <li><span class="n">1</span><div><b>Pick a game</b><p>Refract finds Steam, Epic, GOG, Ubisoft, Xbox and EA installs. Use <i class="ph ph-folder-plus"></i> for anything else.</p></div></li>
+        <li><span class="n">2</span><div><b>Enable DLSS 5</b><p>In the game's <b>Setup</b> tab. Refract installs ReShade, the RenoDX add-on and the neural-rendering runtime from inside the app &mdash; RTX 20, 30, 40 and 50 cards.</p></div></li>
+        <li><span class="n">3</span><div><b>Set up the game once</b><p>Display mode <b>Borderless</b>, and turn <b>DLSS or DLAA on</b> in its graphics menu. DLSS 5 runs on top of the game's DLSS.</p></div></li>
+        <li><span class="n">4</span><div><b>Play and tune</b><p>Press <kbd>Home</kbd> in game for ReShade &rarr; Add-ons &rarr; RenoDX. <span id="guideOverlayKey">Ctrl + Alt + R</span> opens Refract's overlay. <b>Restore original</b> undoes everything.</p></div></li>
+      </ol>
+      <p class="note sheet-foot"><i class="ph ph-shield-warning"></i> Don't use it in online or anti-cheat games &mdash; ReShade can get you banned there.</p>
+      <div class="actions"><button class="liquid-btn" id="welcomeDone"><span>Got it</span></button></div>
+    </div>
+  </div>
+
 </div>
 <div class="toasts" id="toasts" aria-live="polite"></div>
 <script src="../shared/looks.js"></script>

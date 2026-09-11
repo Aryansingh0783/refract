@@ -142,7 +142,14 @@
 
   // ---- MO-22 view transitions
   function swap(fn) {
-    if (document.startViewTransition && !reduce()) return document.startViewTransition(fn);
+    if (document.startViewTransition && !reduce()) {
+      // A newer swap (or a hidden window) aborts the running transition; that's expected,
+      // so its promises must not surface as unhandled rejections.
+      const t = document.startViewTransition(fn);
+      const quiet = () => {};
+      t.ready.catch(quiet); t.finished.catch(quiet); t.updateCallbackDone.catch(quiet);
+      return t;
+    }
     fn();
     return null;
   }

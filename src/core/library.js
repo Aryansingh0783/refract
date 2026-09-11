@@ -197,7 +197,7 @@ async function inspect(game) {
   });
   const dlls = [];
   const exes = [];
-  let reshadeIni = null;
+  const inis = [];
   for (const p of found) {
     const base = path.basename(p);
     if (DLSS_RE.test(base)) {
@@ -205,7 +205,7 @@ async function inspect(game) {
       dlls.push({ file: base, path: p, version: v ? v.text : null,
         description: v && v.strings.FileDescription || null,
         backup: await exists(p + '.refract-backup') });
-    } else if (base.toLowerCase() === RESHADE_INI) reshadeIni = p;
+    } else if (base.toLowerCase() === RESHADE_INI) inis.push(p);
     else if (!EXE_SKIP.test(base)) exes.push(p);
   }
   // Guess the main executable: prefer the one next to the DLSS runtime, then the largest.
@@ -219,10 +219,13 @@ async function inspect(game) {
     }
     exe = best;
   }
+  // ReShade reads the ini next to its DLL, which sits next to the game exe.
+  const exeDir = exe ? path.dirname(exe) : game.dir;
+  const reshadeIni = inis.find(p => path.dirname(p).toLowerCase() === exeDir.toLowerCase()) || inis[0] || null;
   // Render API + bitness from the chosen exe (for ReShade proxy choice + feeder eligibility).
   let api = null, apiLabel = null, bitness = null, dx = null;
   if (exe) { try { const d = detectApiDeep(exe); api = d.api; apiLabel = d.label; dx = d.dx; bitness = getBitness(exe); } catch {} }
-  return { ...game, exe, exeDir: exe ? path.dirname(exe) : game.dir, api, apiLabel, dx, bitness,
+  return { ...game, exe, exeDir, api, apiLabel, dx, bitness,
     dlls, reshadeIni, hasDlss: dlls.length > 0, inspectedAt: Date.now() };
 }
 

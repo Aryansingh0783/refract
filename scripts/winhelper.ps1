@@ -124,6 +124,33 @@ public static class RefractNative {
     uint pid; GetWindowThreadProcessId(GetForegroundWindow(), out pid);
     try { return Process.GetProcessById((int)pid).ProcessName; } catch { return ""; }
   }
+
+  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+
+  // Hand keyboard focus back to a game after the overlay closes. Windows only lets the
+  // foreground process move focus, so a synthetic Alt tap is used to lift that lock first.
+  public static bool FocusProcess(string name) {
+    foreach (var p in Process.GetProcessesByName(name)) {
+      IntPtr h = p.MainWindowHandle;
+      if (h == IntPtr.Zero || !IsWindowVisible(h)) continue;
+      keybd_event(0x12, 0, 0, UIntPtr.Zero);
+      keybd_event(0x12, 0, 2, UIntPtr.Zero);
+      return SetForegroundWindow(h);
+    }
+    return false;
+  }
+
+  // Process count plus how many of them own a visible top-level window. A game that has
+  // closed its window but lingers in the background counts as closed for the session.
+  public static int[] ProcState(string name) {
+    int count = 0, windows = 0;
+    foreach (var p in Process.GetProcessesByName(name)) {
+      count++;
+      try { if (p.MainWindowHandle != IntPtr.Zero && IsWindowVisible(p.MainWindowHandle)) windows++; } catch {}
+    }
+    return new int[] { count, windows };
+  }
 }
 "@
 
@@ -153,6 +180,8 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
       'foreground' { Reply $req.id $true ([RefractNative]::ForegroundProcess()) }
       'hlsl'       { $r = [RefractNative]::CompileHlsl([string]$a.src, [string]$a.entry, [string]$a.target); Reply $req.id $true @{ ok = ($r -eq ''); log = $r } }
       'running'    { $n = [IO.Path]::GetFileNameWithoutExtension([string]$a.name); $p = @(Get-Process -Name $n -ErrorAction SilentlyContinue); Reply $req.id $true ($p.Count -gt 0) }
+      'procstate'  { $n = [IO.Path]::GetFileNameWithoutExtension([string]$a.name); $r = [RefractNative]::ProcState($n); Reply $req.id $true @{ count = $r[0]; windows = $r[1] } }
+      'focus'      { $n = [IO.Path]::GetFileNameWithoutExtension([string]$a.name); Reply $req.id $true ([RefractNative]::FocusProcess($n)) }
       default      { Reply $req.id $false "unknown command $($req.cmd)" }
     }
   } catch {

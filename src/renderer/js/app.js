@@ -6,12 +6,13 @@
   const $ = (s, r = document) => r.querySelector(s);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const TIER_LABEL = { native: 'Native', balanced: 'Balanced', performance: 'Performance' };
-  const STORE_ICON = { steam: 'ph-steam-logo', epic: 'ph-storefront', gog: 'ph-storefront', folder: 'ph-folder' };
+  const STORE_ICON = { steam: 'ph-steam-logo', epic: 'ph-storefront', gog: 'ph-storefront', ubisoft: 'ph-storefront', ea: 'ph-storefront', xbox: 'ph-game-controller', battlenet: 'ph-storefront', folder: 'ph-folder' };
+  const STORE_NAME = { steam: 'Steam', epic: 'Epic', gog: 'GOG', ubisoft: 'Ubisoft', ea: 'EA', xbox: 'Xbox', battlenet: 'Battle.net', folder: 'Folder' };
 
   const state = {
     settings: null, gpu: null, games: [], selected: null, filter: 'dlss', q: '', scanning: false,
     telemetry: null, powerHist: [], ladder: null, tab: 'setup', view: 'library',
-    look: 'cinematic', values: defaults(), transition: 0.6, session: null,
+    look: 'cinematic', values: defaults(), transition: 0.6, session: null, hotkeys: null,
   };
 
   async function call(fn, ...args) {
@@ -79,7 +80,7 @@
     if (!list.length) {
       shelf.innerHTML = `<div class="empty"><span class="ic"><i class="ph ph-game-controller"></i></span>
         <b>${state.games.length ? 'Nothing matches' : 'No games found yet'}</b>
-        <p>${state.games.length ? 'Clear the search or switch to All games.' : 'Refract reads Steam, Epic and GOG. Add a folder for anything installed elsewhere.'}</p></div>`;
+        <p>${state.games.length ? 'Clear the search or switch to All games.' : 'Refract reads Steam, Epic, GOG, Ubisoft, Xbox and EA installs. Add a folder for anything installed elsewhere.'}</p></div>`;
       return;
     }
     shelf.innerHTML = list.map((g, i) => {
@@ -174,7 +175,8 @@
     const tier = cfg.tier || 'native';
     const running = state.session && state.session.state !== 'ended' && state.session.game === g.name;
     const meta = [
-      `<span class="pill"><i class="ph ${STORE_ICON[g.store] || 'ph-folder'}"></i>${esc(g.store === 'folder' ? 'Folder' : g.store[0].toUpperCase() + g.store.slice(1))}</span>`,
+      `<span class="pill"><i class="ph ${STORE_ICON[g.store] || 'ph-folder'}"></i>${esc(STORE_NAME[g.store] || g.store)}</span>`,
+      g.modified && g.modified.length ? `<span class="pill acc"><i class="ph ph-wrench"></i>Refract: ${esc(g.modified.join(', '))}</span>` : '',
       d ? `<span class="pill mono acc">DLSS ${esc(shortVer(d.version))}</span>` : '<span class="pill">No DLSS runtime found</span>',
       lk.installed ? '<span class="pill ok"><i class="ph ph-aperture"></i>Looks ready</span>' : lk.reshade ? '<span class="pill"><i class="ph ph-aperture"></i>ReShade found</span>' : '',
       tier !== 'native' ? `<span class="pill"><i class="ph ph-monitor"></i>${TIER_LABEL[tier]} output</span>` : '',
@@ -189,7 +191,9 @@
         <div class="actions">
           <span class="${running ? 'beam' : ''}"><button class="liquid-btn" data-act="launch" ${running ? 'disabled' : ''}>
             <i class="ph-fill ${running ? 'ph-broadcast' : 'ph-play'}"></i><span>${running ? 'Running' : 'Play'}</span></button></span>
-          <button class="btn glassy" data-act="overlay"><i class="ph ph-picture-in-picture"></i>Overlay</button>
+          ${running ? '<button class="btn ghost" data-act="end-session" title="Use this if the game is closed but Refract still says Running"><i class="ph ph-stop"></i>Mark as closed</button>' : ''}
+          <button class="btn glassy" data-act="overlay" title="${esc(state.hotkeys && state.hotkeys.overlay ? 'In game: ' + state.hotkeys.overlay : 'Show the overlay')}"><i class="ph ph-picture-in-picture"></i>Overlay</button>
+          ${g.modified && g.modified.length ? `<button class="btn ghost" data-act="restore-all" title="Undo everything Refract changed: ${esc(g.modified.join(', '))}"><i class="ph ph-arrow-counter-clockwise"></i><span>Restore original</span></button>` : ''}
           <button class="icon-btn" data-act="folder" aria-label="Open game folder" title="Open game folder"><i class="ph ph-folder-open"></i></button>
         </div>
       </div>
@@ -271,6 +275,18 @@
   }
 
   // DLSS 5 block: upgrade native runtime, or add DLSS 5 (RenoDX) to a game without DLSS.
+  // What to do in the game once DLSS 5 is installed. Most "it looks the same" reports come
+  // from a step here being skipped, so it is spelled out every time.
+  function nextSteps() {
+    const ok = state.hotkeys && state.hotkeys.overlay;
+    return `<ol class="d5-steps">
+      <li>Start the game and set <b>Display mode: Borderless</b> (or windowed).</li>
+      <li>Graphics settings: turn <b>DLSS Super Resolution or DLAA on</b>. DLSS 5 runs on top of it; with FSR/XeSS or DLSS off it stays idle.</li>
+      <li>Press <kbd>Home</kbd> for ReShade &rarr; <b>Add-ons</b> &rarr; the RenoDX tab to tune it. <b>F6</b> toggles it, <b>F5</b> shows an A/B split.</li>
+      <li>${ok ? `<kbd>${esc(state.hotkeys.overlay).replace(/\+/g, '</kbd>+<kbd>')}</kbd> opens the Refract overlay.` : 'The Refract overlay needs a free hotkey (Settings).'}</li>
+      <li>Neural rendering needs extra video and system memory. If the game crashes with <b>out of memory</b>, close browsers and other heavy apps, and lower Path Tracing / Frame Generation first.</li></ol>`;
+  }
+
   async function renderDlss5(g) {
     const el = $('#dlss5Block');
     if (!el) return;
@@ -278,39 +294,38 @@
     try { fs = await api.feederStatus(g.id); if (!fs.ok) throw 0; fs = fs.data; } catch { fs = null; }
     if (!el.isConnected || game() !== g) return;
     let html = '';
-    if (fs && fs.installed) {
-      html = `<div class="d5-row ok"><div><b>DLSS 5 neural rendering active</b><span>RenoDX DLSS is installed. In game: Home &rarr; Add-ons to tune it.</span></div>
-        <button class="btn ghost sm" data-act="feeder-remove">Remove</button></div>`;
+    const progress = `<div class="d5-prog" id="d5Prog" hidden><div class="d5-bar"><i id="d5Bar"></i></div><span id="d5ProgTxt"></span></div>`;
+    if (fs && fs.installed && fs.eligible) {
+      // Installed by an earlier version, but something it needs is missing (typically the
+      // neural-rendering runtime) — offer a one-click repair instead of a dead "active" badge.
+      html = `<div class="d5-row warn"><div><b>DLSS 5 needs a repair</b><span>${esc(fs.reason || 'Some DLSS 5 files are missing or out of date for this GPU.')}</span></div>
+        <button class="btn glassy sm" data-act="feeder-install"><i class="ph ph-wrench"></i>Repair</button></div>${progress}`;
+    } else if (fs && fs.installed) {
+      html = `<div class="d5-row ok"><div><b>DLSS 5 installed</b><span>${esc(fs.routeLabel || 'RenoDX DLSS 5 + ReShade')}. Everything Refract added can be removed with Restore original.</span></div></div>` + nextSteps();
     } else if (fs && fs.already) {
-      html = `<div class="d5-row ok"><div><b>DLSS 5 already set up</b><span>${esc(fs.reason)}</span></div>
-        <button class="btn ghost sm" data-act="go-files">DLSS files</button></div>`;
+      html = `<div class="d5-row ok"><div><b>DLSS 5 already set up</b><span>${esc(fs.reason)}</span></div></div>` + nextSteps();
     } else if (fs && fs.eligible) {
-      html = `<div class="d5-row"><div><b>Upgrade to DLSS 5</b><span>This game's DLSS can be upgraded to DLSS 5 neural rendering. Your own DLSS files are left untouched.</span></div>
-        <button class="btn glassy sm" data-act="feeder-install"><i class="ph ph-sparkle"></i>Enable DLSS 5</button></div>
-        <div class="d5-prog" id="d5Prog" hidden><div class="d5-bar"><i id="d5Bar"></i></div><span id="d5ProgTxt"></span></div>`;
+      html = `<div class="d5-row"><div><b>${fs.route === 'feeder' ? 'Add DLSS 5' : 'Upgrade to DLSS 5'}</b><span>${esc(fs.routeLabel || '')}. Everything ships inside Refract; your game's own files are backed up, never overwritten.</span></div>
+        <button class="btn glassy sm" data-act="feeder-install"><i class="ph ph-sparkle"></i>Enable DLSS 5</button></div>${progress}`;
     } else {
-      html = `<div class="d5-row"><div><b>DLSS 5 (RenoDX)</b><span>${esc((fs && fs.reason) || 'Not available for this game.')}</span></div></div>`;
+      html = `<div class="d5-row"><div><b>DLSS 5 isn't available here</b><span>${esc((fs && fs.reason) || 'Not available for this game.')}</span></div></div>`;
     }
     // Competing DLSS add-ons in one folder is the classic "it's listed but does nothing" trap.
     if (fs && fs.warnings && fs.warnings.length && !fs.already) {
-      html += `<div class="d5-row warn"><div><b>Add-on conflict</b><span>${esc(fs.warnings[0])}</span></div></div>`;
+      html += `<div class="d5-row warn"><div><b>Heads up</b><span>${esc(fs.warnings[0])}</span></div></div>`;
     }
-    // RTX 20/30/40: neural rendering is a Blackwell feature unless a patched runtime is used.
-    if (fs && fs.gpuSupport === 'patch') {
+    // GPU line: what Refract does for this card, and the override.
+    if (fs && (fs.gpuSupport === 'patch' || fs.gpuSupport === 'native')) {
       const u = fs.unlock || {};
-      const on = !!u.enabled;
       const own = u.source === 'own' && u.runtime;
-      const using = own ? 'your file (' + esc(String(u.runtime).split(/[\\/]/).pop()) + ')'
-                        : 'the community Universal RTX 20/30/40/50 build';
-      html += `<div class="d5-row ${on ? 'ok' : 'warn'}">
-        <div><b>RTX 20/30/40 unlock &middot; ${on ? 'on' : 'off'}</b><span>${on
-          ? 'Using ' + using + '. This is a patched NVIDIA runtime; expect a large frame-rate cost versus RTX 50.'
-          : 'NVIDIA enables DLSS 5 neural rendering on RTX 50 only. A patched nvngx_dlssnr.dll runs it on this card.'}</span></div>
-        <button class="btn ${on ? 'ghost' : 'glassy'} sm" data-act="${on ? 'unlock-off' : 'unlock-on'}">${on ? 'Turn off' : 'Enable'}</button></div>`;
-      if (on) {
-        html += `<div class="d5-row sub"><div><span>Runtime source: ${using}.</span></div>
-          <button class="btn ghost sm" data-act="pick-patched"><i class="ph ph-key"></i>${own ? 'Change file' : 'Use my own file'}</button></div>`;
-      }
+      const card = esc(fs.gpuName || 'your GPU');
+      const text = fs.gpuSupport === 'native'
+        ? `${card}: DLSS 5 neural rendering is supported natively.`
+        : u.enabled === false
+          ? `${card}: the universal neural-rendering runtime is switched off, so DLSS 5 stays off on this card.`
+          : `${card}: Refract installs the universal RTX 20/30/40/50 neural-rendering runtime${own ? ' (your own file)' : ''} so DLSS 5 runs here. Expect a bigger frame-rate cost than on RTX 50.`;
+      html += `<div class="d5-row sub"><div><span>${text}</span></div>${fs.gpuSupport === 'patch'
+        ? `<button class="btn ghost sm" data-act="${u.enabled === false ? 'unlock-on' : 'pick-patched'}">${u.enabled === false ? 'Turn on' : own ? 'Change file' : 'Use my own file'}</button>` : ''}</div>`;
     }
     el.innerHTML = html;
   }
@@ -347,18 +362,32 @@
       else if (act === 'feeder-install') {
         b.disabled = true;
         const prog = $('#d5Prog'); if (prog) prog.hidden = false;
-        Prism.toast('Enabling DLSS 5', 'Adding ReShade and the RenoDX DLSS add-on to ' + g.name + '. Your own DLSS files stay as they are.');
+        Prism.toast('Enabling DLSS 5', 'Installing into ' + g.name + '. Your game\'s own files are backed up, never overwritten.');
         replaceGame(await call(api.feederInstall, g.id));
-        Prism.toast('DLSS 5 enabled', 'Launch the game, press Home, and open the Add-ons tab to tune neural rendering.');
+        Prism.toast('DLSS 5 ready', 'In the game: Borderless, DLSS on, then Home → Add-ons to tune it.');
       }
       else if (act === 'feeder-remove') { replaceGame(await call(api.feederRestore, g.id)); Prism.toast('DLSS 5 removed', 'The game folder is back to how it was.'); }
+      else if (act === 'restore-all') {
+        // Two clicks: the first arms it, so a stray click can't wipe a setup.
+        if (!b.dataset.armed) {
+          b.dataset.armed = '1'; b.classList.add('armed');
+          b.querySelector('span').textContent = 'Click again to restore';
+          setTimeout(() => { if (b.isConnected) { delete b.dataset.armed; b.classList.remove('armed'); b.querySelector('span').textContent = 'Restore original'; } }, 4000);
+          return;
+        }
+        b.disabled = true;
+        const ng = await call(api.restoreAll, g.id);
+        replaceGame(ng);
+        Prism.toast('Back to original', ng.restored && ng.restored.length ? 'Removed: ' + ng.restored.join(', ') + '.' : 'Nothing left to undo.');
+      }
+      else if (act === 'end-session') { await call(api.endSession); }
       else if (act === 'pick-patched') {
         const r = await call(api.pickPatchedRuntime);
         if (r && r.runtime) { Prism.toast('Patched runtime set', 'Refract will use your file instead of downloading one.'); renderDlss5(g); }
       }
       else if (act === 'unlock-on') {
         await call(api.patchSettings, { dlss5Unlock: true, dlss5UnlockSource: 'auto' });
-        Prism.toast('RTX 20/30/40 unlock on', 'Refract will fetch the patched neural-rendering runtime when you enable DLSS 5.');
+        Prism.toast('Universal runtime on', 'Click Enable DLSS 5 (or Repair) to put it in this game.');
         renderDlss5(g);
       }
       else if (act === 'unlock-off') { await call(api.patchSettings, { dlss5Unlock: false }); renderDlss5(g); }
@@ -644,9 +673,41 @@
     const el = $('#session');
     el.hidden = s.state === 'ended';
     $('#sessionText').textContent = s.state === 'launching' ? 'Starting ' + s.game : 'Playing ' + s.game;
-    if (s.state === 'ended') { Prism.toast('Session ended', 'Desktop resolution restored.'); loadLadder(true); }
+    if (s.state === 'ended') { Prism.toast('Session ended', s.game + ' closed.'); loadLadder(true); }
     applyAppearance(); renderHero();
   });
+  $('#sessionEnd').addEventListener('click', () => call(api.endSession).catch(() => {}));
+  api.on('hotkeys', h => { state.hotkeys = h; renderGuideKey(); });
+
+  // ================================================================ first-run guide
+  function renderGuideKey() {
+    const k = state.hotkeys && state.hotkeys.overlay;
+    const el = $('#guideOverlayKey');
+    if (el) el.innerHTML = k ? k.split('+').map(x => `<kbd>${esc(x)}</kbd>`).join(' + ') : 'The overlay hotkey';
+  }
+  function openGuide() { renderGuideKey(); const w = $('#welcome'); w.hidden = false; Prism.pop($('.sheet-card', w)); $('#welcomeDone').focus(); }
+  function closeGuide() { $('#welcome').hidden = true; if (!state.settings.onboarded) { state.settings.onboarded = true; call(api.markOnboarded).catch(() => {}); } }
+  $('#help').addEventListener('click', openGuide);
+  $('#openGuide').addEventListener('click', openGuide);
+  $('#restoreEverything').addEventListener('click', async e => {
+    const b = e.currentTarget;
+    if (!b.dataset.armed) {
+      b.dataset.armed = '1'; b.classList.add('armed'); b.querySelector('span').textContent = 'Click again';
+      setTimeout(() => { delete b.dataset.armed; b.classList.remove('armed'); b.querySelector('span').textContent = 'Restore all'; }, 4000);
+      return;
+    }
+    b.disabled = true;
+    try {
+      const report = await call(api.restoreEverything);
+      const ok = report.filter(r => !r.error), bad = report.filter(r => r.error);
+      Prism.toast(ok.length ? `Restored ${ok.length} game${ok.length === 1 ? '' : 's'}` : 'Nothing to restore',
+        bad.length ? `Couldn't restore: ${bad.map(r => r.game).join(', ')}` : ok.map(r => r.game).join(', ') || 'No game has Refract changes.', bad.length ? 'err' : undefined);
+      scan();
+    } finally { b.disabled = false; delete b.dataset.armed; b.classList.remove('armed'); b.querySelector('span').textContent = 'Restore all'; }
+  });
+  $('#welcomeDone').addEventListener('click', closeGuide);
+  $('#welcome').addEventListener('click', e => { if (e.target.id === 'welcome') closeGuide(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#welcome').hidden) closeGuide(); });
   api.on('display', () => loadLadder(true));
   api.on('settings', s => { state.settings = s; });
 
@@ -655,7 +716,9 @@
     try {
       const r = await api.state();
       const s = r.data;
-      state.settings = s.settings; state.gpu = s.gpu; state.telemetry = s.telemetry;
+      state.settings = s.settings; state.gpu = s.gpu; state.telemetry = s.telemetry; state.hotkeys = s.hotkeys || null;
+      if (s.session) { state.session = s.session; $('#session').hidden = false; $('#sessionText').textContent = (s.session.state === 'launching' ? 'Starting ' : 'Playing ') + s.session.game; }
+      if (!s.settings.onboarded && !s.selftest) setTimeout(openGuide, 600);
       state.values = { ...defaults(), ...s.settings.looks };
       state.transition = s.settings.transition ?? 0.6;
       renderSettings(); renderDriver(); renderParams(); renderTelemetry();

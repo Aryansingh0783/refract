@@ -32,7 +32,9 @@ function fixturePayload(dir) {
   const d1 = P(path.join(dir, 'sl', 'nvngx_dlss.dll')); fs.writeFileSync(d1, 'PAYLOAD-DLSS');
   const d2 = P(path.join(dir, 'sl', 'nvngx_dlssnr.dll')); fs.writeFileSync(d2, 'PAYLOAD-NR');
   const d3 = P(path.join(dir, 'sl', 'sl.dlss.dll')); fs.writeFileSync(d3, 'PAYLOAD-SL');
-  return { ok: true, route: 'native', versions: { renodx5: 'test' }, reshadeDll, addon, addonName: 'renodx-dlss5-v2.5.addon64', dlls: [d1, d2, d3], nvngxDlss: d1 };
+  const nr = P(path.join(dir, 'ngx', 'nvngx_dlssnr.dll')); fs.writeFileSync(nr, 'UNIVERSAL-NR');
+  return { ok: true, route: 'native', versions: { renodx5: 'test', dlssnr: 'test' }, reshadeDll, addon, addonName: 'renodx-dlss5-v2.5.addon64',
+    dlls: [d1, d2, d3], nvngxDlss: d1, nvngxNrUniversal: nr };
 }
 // A game that already ships DLSS (so the add-on has NGX to hook).
 function gameWithDlss(gameDir) {
@@ -86,7 +88,7 @@ test('a game with a RenoDX add-on but a limited ReShade gets ReShade upgraded, a
 
   const gate = feeder.plan(dir, { bitness: 64 });
   assert.strictEqual(gate.ok, true);
-  assert.deepStrictEqual(gate.actions, ['reshade-upgrade'], 'only ReShade needs fixing');
+  assert.deepStrictEqual(gate.actions, ['reshade-upgrade', 'nr-runtime'], 'ReShade + the missing NR runtime');
 
   await feeder.install({ exe, api: 'dxgi', bitness: 64 }, payload, { cacheRoot: path.join(base, 'cache') });
   assert.strictEqual(require('../src/core/reshaderuntime').isAddonReShade(path.join(dir, 'dxgi.dll')), true, 'ReShade upgraded to add-on build');
@@ -107,6 +109,7 @@ test('competing DLSS add-ons in one folder are flagged as a conflict', () => {
   for (const a of ['renodx-dlss.addon64', 'renodx-dlss5.addon64', 'dlss5-feed.addon64', 'DLSS5 DX11 Bridge.addon64']) {
     fs.writeFileSync(path.join(dir, a), 'X');
   }
+  fs.writeFileSync(path.join(dir, 'nvngx_dlssnr.dll'), 'NR');
   const gate = feeder.plan(dir, { bitness: 64 });
   assert.strictEqual(gate.inspect.conflicts.length, 4, 'all four DLSS add-ons detected');
   assert.ok(gate.warnings.length, 'a conflict warning is raised');
@@ -131,6 +134,7 @@ test('a fully set-up game reports "already" and suggests enabling DLSS in-game',
   const dir = path.join(base, 'g'); gameWithDlss(dir);
   fs.writeFileSync(path.join(dir, 'renodx-dlss5.addon64'), 'USERS-OWN');
   fs.writeFileSync(path.join(dir, 'dxgi.dll'), RESHADE_ADDON_BYTES);
+  fs.writeFileSync(path.join(dir, 'nvngx_dlssnr.dll'), 'NR');
   const gate = feeder.plan(dir, { bitness: 64 });
   assert.strictEqual(gate.ok, false);
   assert.strictEqual(gate.already, true);
@@ -155,11 +159,12 @@ test('install is additive: never overwrites the game\'s own DLSS DLLs or ReShade
   // because Streamline's interposer and plugins must stay a version-matched set.
   assert.ok(fs.existsSync(path.join(gameDir, 'dxgi.dll')), 'ReShade proxy added');
   assert.ok(fs.existsSync(path.join(gameDir, 'renodx-dlss5-v2.5.addon64')), 'RenoDX add-on added');
-  assert.ok(!fs.existsSync(path.join(gameDir, 'nvngx_dlssnr.dll')), 'no foreign runtime DLL mixed into the game\'s own set');
+  assert.strictEqual(fs.readFileSync(path.join(gameDir, 'nvngx_dlssnr.dll'), 'utf8'), 'UNIVERSAL-NR', 'missing NR runtime added (the reason NR stayed off on RTX 30)');
+  assert.ok(!fs.existsSync(path.join(gameDir, 'sl.dlss_nr.dll')), 'no Streamline plugin mixed into the game\'s own set');
   assert.strictEqual(feeder.status(gameDir).installed, true);
 
   await feeder.restore(gameDir);
-  for (const f of ['dxgi.dll', 'renodx-dlss5-v2.5.addon64', 'refract-feeder.json']) {
+  for (const f of ['dxgi.dll', 'renodx-dlss5-v2.5.addon64', 'nvngx_dlssnr.dll', 'refract-feeder.json']) {
     assert.ok(!fs.existsSync(path.join(gameDir, f)), f + ' removed on restore');
   }
   assert.strictEqual(fs.readFileSync(path.join(gameDir, 'nvngx_dlss.dll'), 'utf8'), 'GAME-OWN-DLSS', 'game DLSS intact after restore');
@@ -228,13 +233,153 @@ test('RTX 20/30/40 needs the unlock; RTX 50 does not; non-RTX is refused', () =>
   const opts = { bitness: 64, api: 'dxgi', dx: 12 };
   const ampere = { name: 'NVIDIA GeForce RTX 3060', dlss5: 'patch', series: 30, arch: 'Ampere' };
   const off = feeder.plan(dir, { ...opts, gpu: ampere, unlock: { enabled: false } });
-  assert.ok(off.warnings.some(w => /RTX 20\/30\/40 unlock/i.test(w)), 'warns that the unlock is needed');
-  const on = feeder.plan(dir, { ...opts, gpu: ampere, unlock: { enabled: true } });
-  assert.strictEqual(on.warnings.length, 0, 'no warning once the unlock is on');
+  assert.ok(off.warnings.some(w => /switched off/i.test(w)), 'warns when the user switched the runtime off');
+  const on = feeder.plan(dir, { ...opts, gpu: ampere });
+  assert.strictEqual(on.warnings.length, 0, 'on by default: no warning');
+  assert.ok(on.actions.includes('nr-runtime'), 'RTX 30 needs the universal runtime');
   const blackwell = feeder.plan(dir, { ...opts, gpu: { name: 'NVIDIA GeForce RTX 5070', dlss5: 'native', series: 50 } });
   assert.strictEqual(blackwell.warnings.length, 0, 'RTX 50 needs no unlock');
   const gtx = feeder.plan(dir, { ...opts, gpu: { name: 'NVIDIA GeForce GTX 1080 Ti', dlss5: 'unsupported' } });
   assert.strictEqual(gtx.ok, false);
   assert.match(gtx.reason, /no DLSS hardware/i);
   fs.rmSync(base, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------- neural-rendering runtime
+const AMPERE = { name: 'NVIDIA GeForce RTX 3060', dlss5: 'patch', series: 30, arch: 'Ampere' };
+const BLACKWELL = { name: 'NVIDIA GeForce RTX 5070', dlss5: 'native', series: 50, arch: 'Blackwell' };
+
+test('RTX 3060 regression: a stock game with no nvngx_dlssnr.dll gets the universal runtime', async () => {
+  // Exactly the brother's PC: add-on hooks DLSS, then "nvngx_dlssnr.dll was not found ... NR stays off".
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-nr30-'));
+  const payload = fixturePayload(path.join(base, 'cache'));
+  const dir = path.join(base, 'Cyberpunk 2077', 'bin', 'x64'); const exe = gameWithDlss(dir);
+  await feeder.install({ exe, api: 'dxgi', dx: 12, bitness: 64 }, payload, { cacheRoot: path.join(base, 'cache'), gpu: AMPERE });
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'nvngx_dlssnr.dll'), 'utf8'), 'UNIVERSAL-NR');
+  assert.strictEqual(feeder.nrNeeded(dir, { gpu: AMPERE, unlock: { enabled: true, source: 'own', runtime: payload.nvngxNrUniversal } }), false);
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('RTX 30 with a stock NVIDIA nvngx_dlssnr.dll gets it replaced (backed up); restore puts it back', async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-nrstock-'));
+  const payload = fixturePayload(path.join(base, 'cache'));
+  const dir = path.join(base, 'g'); const exe = gameWithDlss(dir);
+  fs.writeFileSync(path.join(dir, 'nvngx_dlssnr.dll'), 'STOCK-SIGNED');
+  assert.ok(feeder.plan(dir, { bitness: 64, gpu: AMPERE }).actions.includes('nr-runtime'));
+  await feeder.install({ exe, api: 'dxgi', dx: 12, bitness: 64 }, payload, { cacheRoot: path.join(base, 'cache'), gpu: AMPERE });
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'nvngx_dlssnr.dll'), 'utf8'), 'UNIVERSAL-NR');
+  await feeder.restore(dir);
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'nvngx_dlssnr.dll'), 'utf8'), 'STOCK-SIGNED', 'original runtime back');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('RTX 50 keeps whatever nvngx_dlssnr.dll already works; adds the universal one only if missing', async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-nr50-'));
+  const payload = fixturePayload(path.join(base, 'cache'));
+  const has = path.join(base, 'has'); const exeA = gameWithDlss(has);
+  fs.writeFileSync(path.join(has, 'nvngx_dlssnr.dll'), 'WORKING-ON-5070');
+  assert.strictEqual(feeder.nrNeeded(has, { gpu: BLACKWELL }), false);
+  await feeder.install({ exe: exeA, api: 'dxgi', dx: 12, bitness: 64 }, payload, { cacheRoot: path.join(base, 'cache'), gpu: BLACKWELL });
+  assert.strictEqual(fs.readFileSync(path.join(has, 'nvngx_dlssnr.dll'), 'utf8'), 'WORKING-ON-5070', 'RTX 50 setup untouched');
+  const bare = path.join(base, 'bare'); const exeB = gameWithDlss(bare);
+  await feeder.install({ exe: exeB, api: 'dxgi', dx: 12, bitness: 64 }, payload, { cacheRoot: path.join(base, 'cache'), gpu: BLACKWELL });
+  assert.strictEqual(fs.readFileSync(path.join(bare, 'nvngx_dlssnr.dll'), 'utf8'), 'UNIVERSAL-NR');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('switching the runtime off leaves the folder alone; a user-supplied file is used instead of the bundled one', async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-nrown-'));
+  const payload = fixturePayload(path.join(base, 'cache'));
+  const off = path.join(base, 'off'); const exeA = gameWithDlss(off);
+  assert.strictEqual(feeder.nrNeeded(off, { gpu: AMPERE, unlock: { enabled: false } }), false);
+  await feeder.install({ exe: exeA, api: 'dxgi', dx: 12, bitness: 64 }, payload, { cacheRoot: path.join(base, 'cache'), gpu: AMPERE, unlock: { enabled: false } });
+  assert.ok(!fs.existsSync(path.join(off, 'nvngx_dlssnr.dll')));
+  const own = path.join(base, 'mine', 'nvngx_dlssnr.dll'); fs.mkdirSync(path.dirname(own)); fs.writeFileSync(own, 'MY-OWN-NR');
+  const mine = path.join(base, 'mine-game'); const exeB = gameWithDlss(mine);
+  await feeder.install({ exe: exeB, api: 'dxgi', dx: 12, bitness: 64 }, payload, { cacheRoot: path.join(base, 'cache'), gpu: AMPERE, unlock: { enabled: true, source: 'own', runtime: own } });
+  assert.strictEqual(fs.readFileSync(path.join(mine, 'nvngx_dlssnr.dll'), 'utf8'), 'MY-OWN-NR');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('an install from an older version is repairable, and one restore undoes both runs', async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-repair-'));
+  const payload = fixturePayload(path.join(base, 'cache'));
+  const dir = path.join(base, 'g'); const exe = gameWithDlss(dir);
+  // Simulate v0.1: ReShade + add-on + ini added, but no NR runtime.
+  fs.writeFileSync(path.join(dir, 'dxgi.dll'), RESHADE_ADDON_BYTES);
+  fs.writeFileSync(path.join(dir, 'renodx-dlss5.addon64'), 'RENODX-4.70');
+  fs.writeFileSync(path.join(dir, 'ReShade.ini'), '[GENERAL]\r\nPresetPath=.\\ReShadePreset.ini\r\n');
+  fs.writeFileSync(path.join(dir, 'refract-feeder.json'), JSON.stringify({ version: 4, route: 'native', exeDir: dir, replaced: [],
+    added: ['dxgi.dll', 'renodx-dlss5.addon64', 'ReShade.ini'].map(n => ({ path: path.join(dir, n), kind: 'x' })) }));
+  const gate = feeder.plan(dir, { bitness: 64, gpu: AMPERE });
+  assert.strictEqual(gate.ok, true, 'not a dead "already set up"');
+  assert.strictEqual(gate.repair, true);
+  assert.deepStrictEqual(gate.actions, ['nr-runtime']);
+  await feeder.install({ exe, api: 'dxgi', dx: 12, bitness: 64 }, payload, { cacheRoot: path.join(base, 'cache'), gpu: AMPERE });
+  assert.ok(fs.existsSync(path.join(dir, 'nvngx_dlssnr.dll')));
+  assert.match(fs.readFileSync(path.join(dir, 'ReShade.ini'), 'utf8'), /\[RenoDX\.DLSS5\][\s\S]*NRPreset=2/, 'tuned NR settings added');
+  const man = JSON.parse(fs.readFileSync(path.join(dir, 'refract-feeder.json'), 'utf8'));
+  assert.ok(man.added.some(e => /dxgi\.dll$/.test(e.path)) && man.added.some(e => /nvngx_dlssnr\.dll$/.test(e.path)), 'manifest merged');
+  await feeder.restore(dir);
+  for (const f of ['dxgi.dll', 'renodx-dlss5.addon64', 'ReShade.ini', 'nvngx_dlssnr.dll', 'refract-feeder.json']) {
+    assert.ok(!fs.existsSync(path.join(dir, f)), f + ' removed');
+  }
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'nvngx_dlss.dll'), 'utf8'), 'GAME-OWN-DLSS');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('restore also removes the logs and preset ReShade created, but never the user\'s own new files', async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-artifacts-'));
+  const payload = fixturePayload(path.join(base, 'cache'));
+  const dir = path.join(base, 'g'); const exe = gameWithDlss(dir);
+  await feeder.install({ exe, api: 'dxgi', dx: 12, bitness: 64 }, payload, { cacheRoot: path.join(base, 'cache') });
+  for (const f of ['ReShade.log', 'ReShade.log1', 'ReShadePreset.ini', 'renodx-dlss5.log', 'savegame.dat', 'screenshot.png']) fs.writeFileSync(path.join(dir, f), 'x');
+  await feeder.restore(dir);
+  for (const f of ['ReShade.log', 'ReShade.log1', 'ReShadePreset.ini', 'renodx-dlss5.log']) assert.ok(!fs.existsSync(path.join(dir, f)), f + ' removed');
+  for (const f of ['savegame.dat', 'screenshot.png', 'keep.txt']) assert.ok(fs.existsSync(path.join(dir, f)), f + ' kept');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('dlss5ReShade: fresh config is tuned; a user\'s own NR tuning is never overwritten', () => {
+  const fresh = cfg.dlss5ReShade('');
+  assert.match(fresh, /\[RenoDX\.DLSS5\][\s\S]*EnableHooks=2[\s\S]*NRPreset=2[\s\S]*NRStyle=1/);
+  assert.match(fresh, /DisabledAddons=Generic Depth,Effect Runtime Sync/);
+  assert.match(fresh, /KeyOverlay=36,0,0,0/);
+  const mine = cfg.dlss5ReShade('[RenoDX.DLSS5]\r\nNRIntensity=2\r\nNRStyle=2\r\n[ADDON]\r\nDisabledAddons=renodx-dlss5,Generic Depth\r\n');
+  assert.match(mine, /NRStyle=2/, 'user value kept');
+  assert.doesNotMatch(mine, /NRPreset=2/, 'no tuned block forced into a tuned config');
+  assert.match(mine, /DisabledAddons=Generic Depth\r\n/, 'our add-on can no longer be disabled');
+});
+
+test('looks: ReShade installed for looks is the add-on build and is fully removed by removeAll', async () => {
+  const reshade = require('../src/core/reshade');
+  const bundle = require('../src/core/bundle');
+  const rt = require('../src/core/reshaderuntime');
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-looksrt-'));
+  const pay = path.join(base, 'payload'); fs.mkdirSync(path.join(pay, 'reshade'), { recursive: true });
+  fs.writeFileSync(path.join(pay, 'reshade', 'ReShade64.dll'), RESHADE_ADDON_BYTES);
+  fs.writeFileSync(path.join(pay, 'manifest.json'), JSON.stringify({ files: { 'reshade/ReShade64.dll': bundle.sha256File(path.join(pay, 'reshade', 'ReShade64.dll')) } }));
+  process.env.REFRACT_PAYLOAD = pay; bundle._reset();
+  try {
+    const dir = path.join(base, 'g'); fs.mkdirSync(dir); fs.writeFileSync(path.join(dir, 'keep.txt'), 'k');
+    const r = await reshade.ensureRuntime(dir, { api: 'dxgi', bitness: 64, cacheRoot: base });
+    assert.strictEqual(r.installed, true);
+    assert.strictEqual(rt.isAddonReShade(path.join(dir, 'dxgi.dll')), true, 'add-on build, so DLSS 5 add-ons still load');
+    await reshade.install(r.iniPath, {});
+    fs.writeFileSync(path.join(dir, 'ReShade.log'), 'log');
+    assert.strictEqual(reshade.touched(dir), true);
+    await reshade.removeAll(dir, r.iniPath);
+    assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['keep.txt'], 'folder back to exactly the user\'s files');
+  } finally { delete process.env.REFRACT_PAYLOAD; bundle._reset(); fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+test('bundle.js refuses a bundled file whose hash does not match the manifest', () => {
+  const bundle = require('../src/core/bundle');
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-bundle-'));
+  fs.mkdirSync(path.join(base, 'ngx'));
+  fs.writeFileSync(path.join(base, 'ngx', 'nvngx_dlssnr.dll'), 'tampered');
+  fs.writeFileSync(path.join(base, 'manifest.json'), JSON.stringify({ files: { 'ngx/nvngx_dlssnr.dll': '0'.repeat(64) } }));
+  process.env.REFRACT_PAYLOAD = base; bundle._reset();
+  try { assert.strictEqual(bundle.file('ngx/nvngx_dlssnr.dll'), null); }
+  finally { delete process.env.REFRACT_PAYLOAD; bundle._reset(); fs.rmSync(base, { recursive: true, force: true }); }
 });

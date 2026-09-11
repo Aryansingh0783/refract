@@ -15,7 +15,9 @@ const { Session } = require('./core/session');
 const { LOOKS, KEYCODES } = require('./shared/looks');
 
 const SELFTEST = process.argv.includes('--selftest');
-if (!SELFTEST && !app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
+// Headless: undo Refract's changes in every game, then exit. Run by the uninstaller.
+const RESTORE_ALL = process.argv.includes('--restore-all');
+if (!SELFTEST && !RESTORE_ALL && !app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
 
 // Game art is served through a private scheme so the renderer never sees raw paths and
 // canvas reads (Looks preview) stay untainted.
@@ -52,10 +54,54 @@ function keyToVk(name) {
   return named[k] ?? null;
 }
 
+const exeDirOf = g => g.exeDir || (g.exe ? path.dirname(g.exe) : g.dir);
+
+// Has Refract changed anything in this game's folder? Drives the "Restore original" button.
+function modifiedState(g) {
+  const dir = exeDirOf(g);
+  const parts = [];
+  if (feeder.status(dir).installed) parts.push('DLSS 5');
+  if ((g.looks && g.looks.installed) || reshade.touched(dir)) parts.push('Looks');
+  if ((g.dlls || []).some(d => d.backup)) parts.push('DLSS files');
+  return parts;
+}
+
 function publicGame(g) {
   const art = {};
   for (const k of Object.keys(g.art || {})) art[k] = `refract-art://game/${encodeURIComponent(g.id)}/${k}`;
-  return { ...g, art, cfg: store.game(g.id) };
+  return { ...g, art, cfg: store.game(g.id), modified: modifiedState(g) };
+}
+
+// Undo everything Refract ever changed for one game: DLSS 5 components, looks + the ReShade
+// runtime it installed (and the files ReShade generated), swapped DLSS DLLs, and a lowered
+// desktop resolution. Order matters: the DLSS 5 manifest first (it may have upgraded a
+// ReShade that the looks feature installed), then looks/ReShade, then DLLs.
+async function restoreGame(g) {
+  const dir = exeDirOf(g);
+  const done = [];
+  if (feeder.status(dir).installed) { await feeder.restore(dir); done.push('DLSS 5 components'); }
+  done.push(...await reshade.removeAll(dir, g.reshadeIni));
+  for (const d of (g.dlls || []).filter(x => x.backup)) { await dlss.restore(d.path); done.push(d.file); }
+  if (store.get().nativeMode) { await session.restore().catch(() => {}); done.push('desktop resolution'); }
+  return done;
+}
+
+// Every game Refract touched, restored. Used by Settings and by the uninstaller.
+async function restoreEverything() {
+  if (!games.length) games = await Promise.all((await library.scanAll(store.get().manualDirs)).map(refreshReshade));
+  const report = [];
+  for (const g of games) {
+    if (!modifiedState(g).length) continue;
+    try { report.push({ game: g.name, restored: await restoreGame(g) }); }
+    catch (e) { report.push({ game: g.name, error: String(e && e.message || e) }); }
+  }
+  return report;
+}
+
+function unlockSetting() {
+  const s = store.get();
+  // The universal neural-rendering runtime is on unless the user switched it off.
+  return { enabled: s.dlss5Unlock !== false, runtime: s.dlss5PatchedRuntime || null, source: s.dlss5UnlockSource || 'auto' };
 }
 
 async function serveArt(request) {
@@ -127,36 +173,84 @@ function createMain() {
   mainWin.on('closed', () => { mainWin = null; app.quit(); });
 }
 
-function createOverlay() {
-  const { workArea } = screen.getPrimaryDisplay();
-  const W = 396, H = 560;
+// The overlay has two states:
+//   interactive  opened with the hotkey: shown, focused and clickable. Taking focus makes the
+//                game release the mouse, so the panel can actually be used mid-game. Press the
+//                hotkey again, Esc, or click back into the game to close it.
+//   HUD          optional ("Pin as HUD"): stays on screen after closing, click-through and
+//                never focused, so it shows live stats without getting in the way.
+// It only draws over borderless/windowed games; exclusive fullscreen covers every window.
+const OVERLAY_W = 396, OVERLAY_H = 560;
+let overlayGame = null;      // process name to hand focus back to
+
+function overlayBounds() {
   const saved = store.get().overlay;
+  const def = screen.getPrimaryDisplay().workArea;
+  let x = saved.x ?? def.x + def.width - OVERLAY_W - 28;
+  let y = saved.y ?? def.y + Math.round((def.height - OVERLAY_H) / 2);
+  // A position saved on a monitor that is no longer there would put it off-screen.
+  const onScreen = screen.getAllDisplays().some(d => x >= d.workArea.x - 40 && y >= d.workArea.y - 40
+    && x + OVERLAY_W <= d.workArea.x + d.workArea.width + 40 && y + OVERLAY_H <= d.workArea.y + d.workArea.height + 40);
+  if (!onScreen) { x = def.x + def.width - OVERLAY_W - 28; y = def.y + Math.round((def.height - OVERLAY_H) / 2); }
+  return { x, y, width: OVERLAY_W, height: OVERLAY_H };
+}
+
+function createOverlay() {
   overlayWin = new BrowserWindow({
-    width: W, height: H,
-    x: saved.x ?? workArea.x + workArea.width - W - 28,
-    y: saved.y ?? workArea.y + Math.round((workArea.height - H) / 2),
+    ...overlayBounds(),
     frame: false, transparent: true, resizable: false, movable: true,
     icon: ICON,
     skipTaskbar: true, alwaysOnTop: true, show: false,
-    focusable: false,           // clicks never steal focus from the game
+    type: 'toolbar',            // no taskbar/alt-tab entry
     hasShadow: false,
     backgroundColor: '#00000000',
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true },
   });
-  overlayWin.setAlwaysOnTop(true, 'screen-saver');
-  overlayWin.setVisibleOnAllWorkspaces(true);
+  overlayWin.setAlwaysOnTop(true, 'screen-saver', 1);
+  overlayWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   watchConsole('overlay', overlayWin.webContents);
   overlayWin.loadFile(path.join(RENDERER, 'overlay.html'));
   overlayWin.on('moved', () => { const [x, y] = overlayWin.getPosition(); store.patch({ overlay: { ...store.get().overlay, x, y } }); });
+  overlayWin.on('blur', () => { if (overlayWin && overlayWin.isVisible() && overlayInteractive) closeOverlay(); });
   for (const ev of ['show', 'hide']) overlayWin.on(ev, telemetryDemand);
-  overlayWin.on('closed', () => { overlayWin = null; });
+  overlayWin.on('closed', () => { overlayWin = null; overlayInteractive = false; });
+}
+
+let overlayInteractive = false;
+async function openOverlay() {
+  if (!overlayWin || overlayWin.isDestroyed()) createOverlay();
+  // Remember the game so focus can go back to it.
+  overlayGame = session.active ? session.active.name : (await win.call('foreground', {}, 3000).catch(() => '')) || null;
+  if (overlayGame && /^(refract|electron)$/i.test(overlayGame)) overlayGame = session.active ? session.active.name : null;
+  overlayInteractive = true;
+  overlayWin.setIgnoreMouseEvents(false);
+  overlayWin.setFocusable(true);
+  overlayWin.setBounds(overlayBounds());
+  overlayWin.show();
+  overlayWin.moveTop();
+  overlayWin.focus();
+  overlayWin.webContents.send('overlay:mode', { interactive: true, pinned: !!store.get().overlay.pinned, hotkey: activeHotkeys.overlay });
+  overlayWin.webContents.send('look', { look: currentLook });
+}
+
+function closeOverlay() {
+  if (!overlayWin || overlayWin.isDestroyed()) return;
+  overlayInteractive = false;
+  if (store.get().overlay.pinned) {
+    overlayWin.setIgnoreMouseEvents(true);
+    overlayWin.setFocusable(false);
+    overlayWin.showInactive();
+    overlayWin.webContents.send('overlay:mode', { interactive: false, pinned: true, hotkey: activeHotkeys.overlay });
+  } else {
+    overlayWin.hide();
+  }
+  if (overlayGame) win.call('focus', { name: overlayGame }, 3000).catch(() => {});
 }
 
 function toggleOverlay() {
-  if (!overlayWin || overlayWin.isDestroyed()) createOverlay();
-  if (overlayWin.isVisible()) overlayWin.hide();
-  else { overlayWin.showInactive(); overlayWin.webContents.send('look', { look: currentLook }); }
-  return overlayWin.isVisible();
+  if (overlayWin && !overlayWin.isDestroyed() && overlayWin.isVisible() && overlayInteractive) { closeOverlay(); return false; }
+  openOverlay().catch(() => {});
+  return true;
 }
 
 // ---------------------------------------------------------------- looks
@@ -171,13 +265,25 @@ async function selectLook(id) {
   return id;
 }
 
+// If another app already owns the overlay hotkey, fall back to the next free one and tell the
+// UI which is live, so the hint on screen is always the key that actually works.
+const OVERLAY_FALLBACKS = ['Ctrl+Alt+R', 'Ctrl+Shift+F10', 'Alt+F10', 'Ctrl+F12'];
+const activeHotkeys = { overlay: null, looks: {} };
 function registerShortcuts() {
   globalShortcut.unregisterAll();
   const s = store.get();
   const failed = [];
-  const reg = (acc, fn) => { try { if (!globalShortcut.register(acc, fn)) failed.push(acc); } catch { failed.push(acc); } };
-  reg(s.overlay.hotkey, toggleOverlay);
-  for (const [id, acc] of Object.entries(s.lookHotkeys)) reg(acc, () => selectLook(id).catch(() => {}));
+  const tryReg = (acc, fn) => { try { return !!acc && globalShortcut.register(acc, fn); } catch { return false; } };
+  activeHotkeys.overlay = null;
+  for (const acc of [s.overlay.hotkey, ...OVERLAY_FALLBACKS.filter(a => a !== s.overlay.hotkey)]) {
+    if (tryReg(acc, toggleOverlay)) { activeHotkeys.overlay = acc; break; }
+    failed.push(acc);
+  }
+  activeHotkeys.looks = {};
+  for (const [id, acc] of Object.entries(s.lookHotkeys)) {
+    if (tryReg(acc, () => selectLook(id).catch(() => {}))) activeHotkeys.looks[id] = acc; else failed.push(acc);
+  }
+  broadcast('hotkeys', activeHotkeys);
   return failed;
 }
 
@@ -192,7 +298,9 @@ function handle(ch, fn) {
 function registerIpc() {
   handle('app:state', async () => ({
     settings: store.get(), gpu, telemetry: lastTelemetry, games: games.map(publicGame),
-    looks: LOOKS, currentLook, platform: process.platform, session: session.active ? { game: session.active.game.name } : null,
+    looks: LOOKS, currentLook, platform: process.platform, selftest: SELFTEST,
+    session: session.active ? { state: session.active.seen ? 'running' : 'launching', game: session.active.game.name } : null,
+    hotkeys: activeHotkeys, payload: require('./core/bundle').info(),
   }));
 
   handle('library:scan', async () => {
@@ -274,8 +382,7 @@ function registerIpc() {
   handle('feeder:status', async gameId => {
     const g = findGame(gameId);
     const dir = g.exeDir || (g.exe ? path.dirname(g.exe) : g.dir);
-    const s = store.get();
-    const unlock = { enabled: !!s.dlss5Unlock, runtime: s.dlss5PatchedRuntime || null, source: s.dlss5UnlockSource || 'auto' };
+    const unlock = unlockSetting();
     const gate = feeder.plan(dir, { bitness: g.bitness || 64, api: g.api || 'dxgi', dx: g.dx || null, gpu, unlock });
     return {
       installed: feeder.status(dir).installed,
@@ -285,6 +392,10 @@ function registerIpc() {
       warnings: gate.warnings || [],
       route: gate.route || null,
       routeLabel: gate.label || null,
+      repair: !!gate.repair,
+      actions: gate.actions || [],
+      gpuName: gpu && gpu.name || null,
+      gpuSeries: gpu && gpu.series || null,
       apiLabel: g.apiLabel,
       gpuSupport: gpu && gpu.dlss5 || null,
       unlock,
@@ -293,7 +404,6 @@ function registerIpc() {
 
   handle('feeder:install', async gameId => {
     const g = findGame(gameId);
-    const s = store.get();
     await feeder.install(
       { exe: g.exe, api: g.api || 'dxgi', apiLabel: g.apiLabel, bitness: g.bitness || 64, dx: g.dx || null },
       null,
@@ -301,11 +411,25 @@ function registerIpc() {
         cacheRoot: cacheRoot(),
         onProgress: p => broadcast('dlss5:progress', { gameId, ...p }),
         gpu,
-        unlock: { enabled: !!s.dlss5Unlock, runtime: s.dlss5PatchedRuntime || null, source: s.dlss5UnlockSource || 'auto' },
+        unlock: unlockSetting(),
       },
     );
     return reinspect(gameId);
   });
+
+  // Undo everything Refract ever changed for this game: DLSS 5 components, looks + the
+  // ReShade runtime it installed (and the files ReShade generated), swapped DLSS DLLs, and a
+  // lowered desktop resolution. Order matters: the DLSS 5 manifest first (it may have
+  // upgraded a ReShade that the looks feature installed), then looks/ReShade, then DLLs.
+  handle('game:restoreAll', async gameId => {
+    const g = findGame(gameId);
+    if (session.active && session.active.game.id === g.id) throw new Error('Close the game first, then restore.');
+    const done = await restoreGame(g);
+    const out = await reinspect(gameId);
+    out.restored = done;
+    return out;
+  });
+  handle('library:restoreEverything', async () => restoreEverything());
 
   // The patched neural-rendering runtime for RTX 20/30/40. The user supplies their own file;
   // Refract only records where it is.
@@ -360,6 +484,14 @@ function registerIpc() {
   });
 
   handle('overlay:toggle', async () => toggleOverlay());
+  handle('overlay:close', async () => { closeOverlay(); return true; });
+  handle('overlay:pin', async on => {
+    store.patch({ overlay: { ...store.get().overlay, pinned: !!on } });
+    if (overlayWin && !overlayWin.isDestroyed()) overlayWin.webContents.send('overlay:mode', { interactive: overlayInteractive, pinned: !!on, hotkey: activeHotkeys.overlay });
+    return !!on;
+  });
+  handle('session:end', async () => session.end('user'));
+  handle('app:onboarded', async () => { store.patch({ onboarded: true }); return true; });
 
   handle('game:openFolder', async id => { const e = await shell.openPath(findGame(id).dir); if (e) throw new Error(e); return true; });
 
@@ -386,7 +518,7 @@ function registerIpc() {
       tier: g ? store.game(g.id).tier || 'native' : null };
   });
 
-  handle('overlay:hide', async () => { if (overlayWin && !overlayWin.isDestroyed()) overlayWin.hide(); });
+  handle('overlay:hide', async () => { closeOverlay(); return true; });
 
   // Newest Steam screenshot, preferring the given game's own (gameId like "steam:1091500").
   handle('screenshot:latest', async gameId => {
@@ -451,6 +583,14 @@ app.whenReady().then(async () => {
   session = new Session(win, store, broadcast);
   nativeTheme.themeSource = 'dark';
   protocol.handle('refract-art', req => serveArt(req).catch(() => new Response('error', { status: 500 })));
+  if (RESTORE_ALL) {
+    let report;
+    try { report = await restoreEverything(); } catch (e) { report = [{ error: String(e && e.message || e) }]; }
+    try { fs.writeFileSync(path.join(app.getPath('userData'), 'restore-report.json'), JSON.stringify({ at: new Date().toISOString(), report }, null, 2)); } catch {}
+    win.stop();
+    app.exit(0);
+    return;
+  }
   registerIpc();
   gpu = await nvidia.getInfo();
   // If Refract crashed mid-session, put the desktop back first.

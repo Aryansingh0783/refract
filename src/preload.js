@@ -16,6 +16,12 @@ contextBridge.exposeInMainWorld('refract', {
   feederInstall: gameId => invoke('feeder:install', gameId),
   feederRestore: gameId => invoke('feeder:restore', gameId),
   pickPatchedRuntime: () => invoke('dlss5:pickPatchedRuntime'),
+  restoreAll: gameId => invoke('game:restoreAll', gameId),
+  restoreEverything: () => invoke('library:restoreEverything'),
+  endSession: () => invoke('session:end'),
+  closeOverlay: () => invoke('overlay:close'),
+  pinOverlay: on => invoke('overlay:pin', on),
+  markOnboarded: () => invoke('app:onboarded'),
   removeLooks: gameId => invoke('reshade:uninstall', gameId),
   saveLooks: payload => invoke('looks:save', payload),
   selectLook: id => invoke('look:select', id),
@@ -34,7 +40,7 @@ contextBridge.exposeInMainWorld('refract', {
   patchSettings: p => invoke('settings:patch', p),
   openExternal: url => invoke('shell:open', url),
   on: (ch, fn) => {
-    const allowed = ['telemetry', 'look', 'display', 'session', 'settings', 'library', 'dlss5:progress'];
+    const allowed = ['telemetry', 'look', 'display', 'session', 'settings', 'library', 'dlss5:progress', 'hotkeys', 'overlay:mode'];
     if (!allowed.includes(ch)) return () => {};
     const h = (_e, data) => fn(data);
     ipcRenderer.on(ch, h);
