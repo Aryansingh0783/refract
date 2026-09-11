@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob: refract-art:; connect-src 'self' refract-art:; style-src 'self'; font-src 'self'; script-src 'self'">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Refract</title>
+<link rel="stylesheet" href="../../node_modules/@fontsource-variable/geist/index.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/ibm-plex-mono/400.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/ibm-plex-mono/500.css">
+<link rel="stylesheet" href="../../node_modules/@phosphor-icons/web/src/regular/style.css">
+<link rel="stylesheet" href="../../node_modules/@phosphor-icons/web/src/fill/style.css">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/prism.css">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<!-- GL-02 refraction filter, referenced by .refract surfaces (Chromium backdrop-filter:url()) -->
+<svg class="svg-defs" aria-hidden="true"><filter id="lens" color-interpolation-filters="sRGB">
+  <feTurbulence type="fractalNoise" baseFrequency="0.006 0.009" numOctaves="2" seed="7" result="n"/>
+  <feGaussianBlur in="n" stdDeviation="2.5" result="nb"/>
+  <feDisplacementMap in="SourceGraphic" in2="nb" scale="38" xChannelSelector="R" yChannelSelector="G"/>
+</filter></svg>
+
+<!-- Stage: the selected game's key art (FX-12 Ken Burns) over a living mesh (FX-122), with a legibility scrim (FX-72) and grain (FX-06) -->
+<div class="stage-bg" aria-hidden="true">
+  <div class="mesh"><i class="a"></i><i class="b"></i><i class="c"></i><i class="d"></i></div>
+  <img class="art" id="artA" alt="">
+  <img class="art" id="artB" alt="">
+  <div class="scrim"></div>
+</div>
+<div class="grain" aria-hidden="true"></div>
+
+<div class="app">
+  <header class="titlebar"><span class="session" id="session" hidden><span class="breath" aria-hidden="true"></span><span id="sessionText"></span></span></header>
+
+  <!-- GL-12 + GL-04: glass dock with MO-27 sliding indicator -->
+  <nav class="dock glass" aria-label="Sections">
+    <div class="mark" aria-hidden="true"></div>
+    <div class="dock-items">
+      <span class="dock-ind" aria-hidden="true"></span>
+      <button data-view="library" aria-current="page"><i class="ph ph-squares-four" aria-hidden="true"></i><span>Library</span></button>
+      <button data-view="performance"><i class="ph ph-gauge" aria-hidden="true"></i><span>Perf</span></button>
+      <button data-view="looks"><i class="ph ph-aperture" aria-hidden="true"></i><span>Looks</span></button>
+      <button data-view="settings"><i class="ph ph-sliders-horizontal" aria-hidden="true"></i><span>Settings</span></button>
+    </div>
+    <button class="gpu-orb" id="gpuOrb" data-view="performance" aria-label="GPU status">
+      <svg viewBox="0 0 44 44" aria-hidden="true"><circle class="bg" cx="22" cy="22" r="18"/><circle class="fg" id="orbRing" cx="22" cy="22" r="18"/></svg>
+      <b id="orbVal">-</b>
+    </button>
+  </nav>
+
+  <main>
+    <!-- ============================== LIBRARY -->
+    <section class="view" id="view-library">
+      <div class="hero" id="hero"></div>
+      <div class="shelf-bar">
+        <h2 class="shelf-title">Library <span id="shelfCount"></span></h2>
+        <div class="search glass-in"><i class="ph ph-magnifying-glass" aria-hidden="true"></i>
+          <input id="q" type="search" aria-label="Search games" placeholder="Search"></div>
+        <div class="seg glassy" id="libFilter" role="group" aria-label="Filter">
+          <span class="th"></span><button aria-pressed="true" data-v="dlss">DLSS</button><button aria-pressed="false" data-v="all">All games</button>
+        </div>
+        <button class="icon-btn" id="addFolder" aria-label="Add a game folder" title="Add a game folder"><i class="ph ph-folder-plus" aria-hidden="true"></i></button>
+        <button class="icon-btn" id="rescan" aria-label="Rescan library" title="Rescan"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i></button>
+      </div>
+      <div class="shelf fade-x" id="shelf" role="listbox" aria-label="Games"></div>
+    </section>
+
+    <!-- ============================== PERFORMANCE -->
+    <section class="view" id="view-performance" hidden>
+      <div class="view-head"><h1>Performance</h1>
+        <span class="live"><span class="breath" aria-hidden="true"></span>Live from nvidia-smi</span>
+        <div class="grow"></div>
+        <button class="btn glassy" id="overlayBtn"><i class="ph ph-picture-in-picture" aria-hidden="true"></i>Show overlay</button></div>
+      <div class="perf">
+        <div class="gauges glass refract" id="gauges"></div>
+        <div class="power glass">
+          <div class="card-h"><h3>Board power</h3><span class="mono muted" id="powerRead"></span></div>
+          <svg class="spark" id="spark" viewBox="0 0 600 120" preserveAspectRatio="none" aria-label="Board power, last 60 seconds">
+            <defs><linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#F0A63A" stop-opacity=".42"/><stop offset="1" stop-color="#F0A63A" stop-opacity="0"/></linearGradient></defs>
+            <line class="limit" id="sparkLimit" x1="0" x2="600" y1="10" y2="10"/>
+            <path class="area" id="sparkArea" d=""/><path class="line" id="sparkLine" d=""/>
+          </svg>
+          <div class="limit-note" id="limitNote"></div>
+        </div>
+        <div class="ladder-card glass">
+          <div class="card-h"><h3>Output resolution</h3></div>
+          <p class="lede">DLSS 5 neural rendering cost follows the resolution the game outputs. Refract drops the desktop resolution for borderless games and restores it when the game closes.</p>
+          <div class="ladder" id="ladder"></div>
+          <button class="btn ghost" id="restoreNative"><i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i>Restore native</button>
+        </div>
+        <div class="tips glass">
+          <div class="card-h"><h3>Also worth doing</h3></div>
+          <div class="tip"><i class="ph ph-arrows-out" aria-hidden="true"></i><p><b>GPU scaling</b>NVIDIA Control Panel, "Perform scaling on: GPU", so lower modes fill the screen cleanly.</p></div>
+          <div class="tip"><i class="ph ph-frame-corners" aria-hidden="true"></i><p><b>Borderless window</b>The overlay and the resolution switch need it. Exclusive fullscreen covers both.</p></div>
+          <div class="tip"><i class="ph ph-stack" aria-hidden="true"></i><p><b>Frame generation</b>Turn on DLSS Frame Generation in the game; Reflex keeps latency down.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================== LOOKS -->
+    <section class="view" id="view-looks" hidden>
+      <div class="looks">
+        <div class="viewer glass">
+          <div class="stagebox"><div class="compare" id="compare" tabindex="0" aria-label="Before and after. Drag, or use arrow keys.">
+            <canvas id="cvAfter"></canvas>
+            <canvas id="cvBefore" class="before"></canvas>
+            <div class="handle" aria-hidden="true"><span><i class="ph ph-arrows-horizontal"></i></span></div>
+            <span class="tag l">Look</span><span class="tag r">Original</span>
+          </div></div>
+          <div class="viewer-bar">
+            <span class="mono muted" id="shotName"></span>
+            <button class="btn glassy sm" id="useArt"><i class="ph ph-image-square" aria-hidden="true"></i>Game art</button>
+            <button class="btn glassy sm" id="useShot"><i class="ph ph-camera" aria-hidden="true"></i>Latest screenshot</button>
+            <button class="btn glassy sm" id="pickShot"><i class="ph ph-folder-open" aria-hidden="true"></i>Choose image</button>
+          </div>
+        </div>
+        <div class="look-side glass">
+          <div class="look-cards" id="lookCards" role="radiogroup" aria-label="Look"></div>
+          <div class="params" id="params"></div>
+          <div class="side-foot">
+            <div class="keys" id="keys"></div>
+            <button class="liquid-btn" id="saveLooks"><span>Save looks</span></button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================== SETTINGS -->
+    <section class="view" id="view-settings" hidden>
+      <div class="view-head"><h1>Settings</h1></div>
+      <div class="settings">
+        <div class="glass pane">
+          <div class="card-h"><h3>Hotkeys</h3></div>
+          <div class="field"><label for="hkOverlay">Show or hide the overlay</label><div class="glass-in"><i class="ph ph-picture-in-picture" aria-hidden="true"></i><input id="hkOverlay" class="mono"></div></div>
+          <div class="field"><label for="hkDefault">Default look</label><div class="glass-in"><i class="ph ph-circle" aria-hidden="true"></i><input id="hkDefault" class="mono"></div></div>
+          <div class="field"><label for="hkCinematic">Cinematic look</label><div class="glass-in"><i class="ph ph-film-strip" aria-hidden="true"></i><input id="hkCinematic" class="mono"></div></div>
+          <div class="field"><label for="hkNatural">Natural Lighting look</label><div class="glass-in"><i class="ph ph-sun-horizon" aria-hidden="true"></i><input id="hkNatural" class="mono"></div>
+            <span class="help">Accelerator format, for example Alt+Shift+2.</span><span class="err" id="hkErr" hidden></span></div>
+          <button class="btn glassy" id="saveHotkeys">Save hotkeys</button>
+        </div>
+        <div class="glass pane">
+          <div class="card-h"><h3>Interface</h3></div>
+          <div class="trow"><div><b>Ambient motion</b><small>Slow zoom on game art and the moving light behind it. Pauses on its own while a game runs.</small></div>
+            <button class="toggle" id="tgMotion" role="switch" aria-checked="true" aria-label="Ambient motion"><i></i></button></div>
+          <div class="trow"><div><b>Reduce transparency</b><small>Solid panels instead of glass.</small></div>
+            <button class="toggle" id="tgRT" role="switch" aria-checked="false" aria-label="Reduce transparency"><i></i></button></div>
+          <div class="card-h"><h3>Driver</h3></div>
+          <dl class="kv" id="driverKv"></dl>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<script src="../shared/looks.js"></script>
+<script src="js/prism.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

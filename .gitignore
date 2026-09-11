@@ -1,0 +1,23 @@
+# dependencies and build output
+node_modules/
+dist/
+out/
+
+# caches and local run artefacts
+.cache/
+selftest-out/
+*.log
+selftest.err
+
+# third-party binaries used only by the local ReShade verification harness
+verify/reshade-harness/
+
+# stray folders created on the dev machine
+Claude outputs/
+NVIDIA Corporation/
+
+# OS / editor noise
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/

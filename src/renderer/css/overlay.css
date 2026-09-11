@@ -1,0 +1,45 @@
+/* Refract in-game overlay. Game pixels live outside this page, so backdrop-filter has
+   nothing to sample; the glass is built from tint, rim, specular and grain, and the tint is
+   strong enough (glass.strong) to hold text contrast over a white frame. */
+*,*::before,*::after{box-sizing:border-box}
+html,body{height:100%;margin:0;background:transparent;overflow:hidden}
+body{font:400 13px/1.45 var(--ui);color:var(--text);-webkit-font-smoothing:antialiased;padding:12px;user-select:none}
+[hidden]{display:none!important}
+.mono{font-family:var(--mono)}
+
+.hud{--g-bg-strong:rgba(12,14,17,.8);height:100%;display:flex;flex-direction:column;gap:16px;padding:16px;border-radius:26px;--beam-r:26px}
+.hud-head{display:flex;align-items:center;gap:12px;-webkit-app-region:drag}
+.mark{width:14px;height:14px;flex:0 0 14px;border-radius:4px;transform:rotate(45deg);
+  background:conic-gradient(from 200deg,var(--accent),#FFD89A,var(--accent-2),var(--accent));box-shadow:0 0 16px -2px color-mix(in oklab,var(--accent) 70%,transparent)}
+.who{flex:1;min-width:0}
+.who b{display:block;font:650 15px var(--display);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.who small{display:block;font-size:11px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hud .icon-btn{-webkit-app-region:no-drag;width:34px;height:34px;font-size:16px}
+
+.grp{display:grid;gap:9px}
+.lbl{display:flex;justify-content:space-between;align-items:baseline;gap:10px;font:600 12.5px var(--ui)}
+.hint{font:400 11.5px var(--ui);color:var(--text-2)}
+.flag{display:inline-flex;align-items:center;gap:5px;font:600 11.5px var(--ui);color:var(--warn)}
+
+.looks3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.looks3 button{display:grid;justify-items:center;gap:6px;padding:12px 6px 10px;border:0;border-radius:16px;cursor:pointer;color:var(--text-2);
+  background:rgba(255,255,255,.05);box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);font:500 12.3px var(--ui);
+  transition:background .3s,color .3s,box-shadow .3s,transform .4s var(--e-back)}
+.looks3 button i{font-size:22px}
+.looks3 button:hover{color:var(--text);transform:translateY(-2px)}
+.looks3 button[aria-checked="true"]{color:var(--accent-ink);
+  background:linear-gradient(180deg,color-mix(in oklab,var(--accent) 90%,#fff),var(--accent));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 10px 22px -10px color-mix(in oklab,var(--accent) 80%,transparent)}
+.seg.block button{padding:0 6px}
+
+.rings{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.rg{display:grid;justify-items:center;gap:6px;padding:12px 6px;border-radius:16px;background:rgba(255,255,255,.045);box-shadow:inset 0 1px 0 rgba(255,255,255,.07)}
+.rg .ring{width:64px;height:64px}
+.rg .ring circle{stroke-width:6}
+.rg .ring .val{font:600 15px var(--mono)}
+.rg small{font:500 11.5px var(--ui);color:var(--text-2)}
+.rg.hot{--ring-c:var(--warn)}
+
+.wide{width:100%;min-height:42px}
+.hud-foot{margin-top:auto;display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:11px;color:var(--text-2)}
+.hud-foot kbd{font-size:10px;padding:2px 5px}
