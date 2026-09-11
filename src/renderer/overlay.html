@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; font-src 'self'; script-src 'self'">
+<title>Refract overlay</title>
+<link rel="stylesheet" href="../../node_modules/@fontsource-variable/geist/index.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/ibm-plex-mono/500.css">
+<link rel="stylesheet" href="../../node_modules/@phosphor-icons/web/src/regular/style.css">
+<link rel="stylesheet" href="../../node_modules/@phosphor-icons/web/src/fill/style.css">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/prism.css">
+<link rel="stylesheet" href="css/overlay.css">
+</head>
+<body>
+<section class="hud glass strong" id="hud" aria-label="Refract overlay">
+  <header class="hud-head">
+    <span class="mark" aria-hidden="true"></span>
+    <div class="who"><b id="gameName">Refract</b><small id="procName" class="mono">No game in focus</small></div>
+    <button class="icon-btn" id="hide" aria-label="Hide overlay"><i class="ph ph-x"></i></button>
+  </header>
+
+  <div class="grp">
+    <div class="lbl"><span>Look</span><span class="hint" id="lookHint"></span></div>
+    <div class="looks3" id="look" role="radiogroup" aria-label="Look">
+      <button data-v="default" role="radio" aria-checked="false"><i class="ph ph-circle-half"></i><span>Default</span></button>
+      <button data-v="cinematic" role="radio" aria-checked="false"><i class="ph ph-film-strip"></i><span>Cinematic</span></button>
+      <button data-v="natural" role="radio" aria-checked="false"><i class="ph ph-sun-horizon"></i><span>Natural</span></button>
+    </div>
+  </div>
+
+  <div class="grp">
+    <div class="lbl"><span>Output resolution</span><span class="hint mono" id="modeRead"></span></div>
+    <div class="seg block" id="tier" role="group" aria-label="Output resolution"><span class="th"></span>
+      <button aria-pressed="true" data-v="native">Native</button><button aria-pressed="false" data-v="balanced">Balanced</button><button aria-pressed="false" data-v="performance">Perf</button>
+    </div>
+  </div>
+
+  <div class="grp gpu" id="gpuGrp">
+    <div class="lbl"><span>GPU</span><span class="flag" id="limitFlag" hidden><i class="ph-fill ph-lightning"></i>Power limited</span></div>
+    <div class="rings" id="rings"></div>
+  </div>
+
+  <button class="btn glassy wide" id="neural" disabled><i class="ph ph-toggle-right"></i><span id="neuralLabel">No neural hotkey saved</span></button>
+
+  <footer class="hud-foot"><span id="keysHint"></span><span>Drag the header</span></footer>
+</section>
+<script src="../shared/looks.js"></script>
+<script src="js/prism.js"></script>
+<script src="js/overlay.js"></script>
+</body>
+</html>

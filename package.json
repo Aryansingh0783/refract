@@ -1,0 +1,56 @@
+{
+  "name": "refract",
+  "productName": "Refract",
+  "version": "0.1.0",
+  "description": "DLSS 5 companion: adds DLSS 5 (RenoDX) to games without it, manages runtimes, governs output resolution, and applies glass in-game look presets.",
+  "author": "Refract",
+  "main": "src/main.js",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "selftest": "electron . --selftest",
+    "dist": "electron-builder --win nsis",
+    "postinstall": "node node_modules/electron/install.js"
+  },
+  "dependencies": {
+    "@fontsource-variable/geist": "5.3.0",
+    "@fontsource/ibm-plex-mono": "5.3.0",
+    "@phosphor-icons/web": "2.1.2"
+  },
+  "devDependencies": {
+    "electron": "44.3.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.refract.app",
+    "productName": "Refract",
+    "directories": { "output": "dist", "buildResources": "assets" },
+    "files": [
+      "src/**/*",
+      "shaders/**/*",
+      "scripts/**/*",
+      "assets/icon.*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "scripts/**/*"
+    ],
+    "win": {
+      "target": ["nsis"],
+      "icon": "assets/icon.ico",
+      "artifactName": "Refract-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Refract",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico"
+    }
+  }
+}

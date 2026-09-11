@@ -1,0 +1,669 @@
+/* Refract main window. */
+(function () {
+  'use strict';
+  const api = window.refract;
+  const { LOOKS, defaults, gradeImage } = window.RefractLooks;
+  const $ = (s, r = document) => r.querySelector(s);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const TIER_LABEL = { native: 'Native', balanced: 'Balanced', performance: 'Performance' };
+  const STORE_ICON = { steam: 'ph-steam-logo', epic: 'ph-storefront', gog: 'ph-storefront', folder: 'ph-folder' };
+
+  const state = {
+    settings: null, gpu: null, games: [], selected: null, filter: 'dlss', q: '', scanning: false,
+    telemetry: null, powerHist: [], ladder: null, tab: 'setup', view: 'library',
+    look: 'cinematic', values: defaults(), transition: 0.6, session: null,
+  };
+
+  async function call(fn, ...args) {
+    const r = await fn(...args);
+    if (!r || !r.ok) { const msg = r ? r.error : 'No response'; Prism.toast('That did not work', msg, 'err'); throw new Error(msg); }
+    return r.data;
+  }
+  const game = () => state.games.find(g => g.id === state.selected) || null;
+  const mainDll = g => g && (g.dlls.find(d => /^nvngx_dlss\.dll$/i.test(d.file)) || g.dlls[0]);
+  const shortVer = v => (v || '').split('.').slice(0, 3).join('.');
+  const hueOf = s => { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) % 360; return `hsl(${h} 45% 38%)`; };
+
+  // ================================================================ views
+  const dock = Prism.dock($('.dock'), v => show(v));
+  function show(view) {
+    if (view === state.view) return;
+    state.view = view;
+    Prism.swap(() => {
+      document.querySelectorAll('main .view').forEach(v => { v.hidden = v.id !== 'view-' + view; });
+      document.querySelectorAll('#view-' + view + ' .seg').forEach(Prism.segMove);
+    });
+    if (view === 'performance') loadLadder();
+    if (view === 'looks') ensureImage();
+  }
+  $('#gpuOrb').addEventListener('click', () => {
+    document.querySelectorAll('.dock-items [data-view]').forEach(x => x.toggleAttribute('aria-current', x.dataset.view === 'performance'));
+    document.querySelector('.dock-items [data-view="performance"]').setAttribute('aria-current', 'page');
+    dock.move(); show('performance');
+  });
+
+  // Ambient motion pauses when the window is not in front or a game is running (saves GPU for the game).
+  window.addEventListener('blur', () => document.documentElement.classList.add('calm'));
+  window.addEventListener('focus', () => document.documentElement.classList.remove('calm'));
+
+  // ================================================================ backdrop
+  let artFlip = false, artUrl = null;
+  function setBackdrop(g) {
+    const url = g && g.art ? (g.art.hero || g.art.header || g.art.capsule) : null;
+    if (url === artUrl) return;
+    artUrl = url;
+    const a = $('#artA'), b = $('#artB');
+    const next = artFlip ? a : b, prev = artFlip ? b : a;
+    artFlip = !artFlip;
+    if (!url) { a.classList.remove('on'); b.classList.remove('on'); return; }
+    next.onload = () => { if (artUrl === url) { next.classList.add('on'); prev.classList.remove('on'); } };
+    next.onerror = () => { next.classList.remove('on'); };
+    next.src = url;
+  }
+
+  // ================================================================ library
+  function visibleGames() {
+    const q = state.q.trim().toLowerCase();
+    return state.games.filter(g => (state.filter === 'all' || g.hasDlss) && (!q || g.name.toLowerCase().includes(q)));
+  }
+
+  function renderShelf() {
+    const shelf = $('#shelf');
+    const list = visibleGames();
+    $('#shelfCount').textContent = state.games.length ? `${list.length} of ${state.games.length}` : '';
+    if (state.scanning && !state.games.length) {
+      shelf.innerHTML = Array.from({ length: 9 }, (_, i) => `<div class="skel rise" data-i="${i}"></div>`).join('');
+      shelf.querySelectorAll('.rise').forEach(el => el.style.setProperty('--i', el.dataset.i));
+      return;
+    }
+    if (!list.length) {
+      shelf.innerHTML = `<div class="empty"><span class="ic"><i class="ph ph-game-controller"></i></span>
+        <b>${state.games.length ? 'Nothing matches' : 'No games found yet'}</b>
+        <p>${state.games.length ? 'Clear the search or switch to All games.' : 'Refract reads Steam, Epic and GOG. Add a folder for anything installed elsewhere.'}</p></div>`;
+      return;
+    }
+    shelf.innerHTML = list.map((g, i) => {
+      const d = mainDll(g);
+      const poster = g.art && g.art.capsule
+        ? `<img src="${esc(g.art.capsule)}" alt="" loading="lazy" draggable="false">`
+        : `<div class="noart" data-hue="${esc(hueOf(g.name))}"><b>${esc(g.name)}</b></div>`;
+      return `<button class="capsule tilt rise" role="option" data-id="${esc(g.id)}" aria-selected="${g.id === state.selected}" aria-label="${esc(g.name)}" data-i="${Math.min(i, 14)}">
+        <span class="poster spot">${poster}<span class="glare"></span></span>
+        <span class="cap"><b>${esc(g.name)}</b><small>${d ? 'DLSS ' + esc(shortVer(d.version)) : esc(g.store)}</small></span></button>`;
+    }).join('');
+    shelf.querySelectorAll('.capsule').forEach(c => c.style.setProperty('--i', c.dataset.i));
+    shelf.querySelectorAll('.noart').forEach(n => n.style.setProperty('--hue', n.dataset.hue));
+    shelf.querySelectorAll('.poster img').forEach(img => img.addEventListener('error', () => {
+      const c = img.closest('.capsule'); const g = state.games.find(x => x.id === c.dataset.id);
+      img.replaceWith(Object.assign(document.createElement('div'), { className: 'noart', innerHTML: `<b>${esc(g.name)}</b>` }));
+      c.querySelector('.noart').style.setProperty('--hue', hueOf(g.name));
+    }));
+  }
+
+  function select(id) {
+    if (id === state.selected) return;
+    state.selected = id;
+    $('#shelf').querySelectorAll('.capsule').forEach(c => c.setAttribute('aria-selected', String(c.dataset.id === id)));
+    const c = $(`#shelf .capsule[data-id="${CSS.escape(id)}"]`);
+    if (c) c.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+    Prism.swap(renderHero);
+    setBackdrop(game());
+    if (state.view === 'looks') { srcKind = null; ensureImage(); }
+  }
+
+  $('#shelf').addEventListener('click', e => { const c = e.target.closest('.capsule'); if (c) select(c.dataset.id); });
+  $('#shelf').addEventListener('keydown', e => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    const list = visibleGames(); const i = list.findIndex(g => g.id === state.selected);
+    const n = list[Math.max(0, Math.min(list.length - 1, i + (e.key === 'ArrowRight' ? 1 : -1)))];
+    if (n) { select(n.id); $(`#shelf .capsule[data-id="${CSS.escape(n.id)}"]`).focus(); }
+    e.preventDefault();
+  });
+  $('#shelf').addEventListener('wheel', e => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) { $('#shelf').scrollLeft += e.deltaY; e.preventDefault(); } }, { passive: false });
+  Prism.pointer($('#shelf'), '.capsule', { tilt: 14 });
+  $('#q').addEventListener('input', e => { state.q = e.target.value; renderShelf(); });
+  Prism.seg($('#libFilter'), v => { state.filter = v; renderShelf(); });
+  $('#rescan').addEventListener('click', scan);
+  $('#addFolder').addEventListener('click', async () => {
+    const g = await call(api.addFolder).catch(() => null);
+    if (!g) return;
+    state.games = [g, ...state.games.filter(x => x.id !== g.id)];
+    state.filter = 'all'; Prism.set($('#libFilter'), 'all');
+    renderShelf(); state.selected = null; select(g.id);
+  });
+
+  async function scan() {
+    state.scanning = true;
+    $('#rescan').classList.add('spin');
+    renderShelf();
+    if (!state.games.length) $('#hero').innerHTML = heroSkeleton();
+    try {
+      state.games = await call(api.scan);
+      const keep = state.games.some(g => g.id === state.selected);
+      if (!keep) state.selected = null;
+      if (!visibleGames().length && state.games.length) { state.filter = 'all'; Prism.set($('#libFilter'), 'all'); }
+    } catch {}
+    state.scanning = false;
+    $('#rescan').classList.remove('spin');
+    renderShelf();
+    const first = state.selected || (visibleGames()[0] || {}).id;
+    state.selected = null;
+    if (first) select(first); else renderHero();
+  }
+
+  function heroSkeleton() {
+    return '<div class="hero-left"><div class="skel sk-a"></div><div class="skel sk-b"></div></div><div class="skel"></div>';
+  }
+
+  function replaceGame(g) {
+    const i = state.games.findIndex(x => x.id === g.id);
+    if (i >= 0) state.games[i] = g; else state.games.unshift(g);
+    renderShelf(); renderHero();
+  }
+
+  // ---------------------------------------------------------------- hero
+  function renderHero() {
+    const el = $('#hero');
+    const g = game();
+    if (!g) {
+      el.innerHTML = state.scanning ? heroSkeleton() : `<div class="hero-left"><h1>Pick a game</h1>
+        <p class="lede">Choose a game from the shelf to manage its DLSS files, looks and output resolution.</p></div>`;
+      return;
+    }
+    const d = mainDll(g), lk = g.looks || {}, cfg = g.cfg || {};
+    const tier = cfg.tier || 'native';
+    const running = state.session && state.session.state !== 'ended' && state.session.game === g.name;
+    const meta = [
+      `<span class="pill"><i class="ph ${STORE_ICON[g.store] || 'ph-folder'}"></i>${esc(g.store === 'folder' ? 'Folder' : g.store[0].toUpperCase() + g.store.slice(1))}</span>`,
+      d ? `<span class="pill mono acc">DLSS ${esc(shortVer(d.version))}</span>` : '<span class="pill">No DLSS runtime found</span>',
+      lk.installed ? '<span class="pill ok"><i class="ph ph-aperture"></i>Looks ready</span>' : lk.reshade ? '<span class="pill"><i class="ph ph-aperture"></i>ReShade found</span>' : '',
+      tier !== 'native' ? `<span class="pill"><i class="ph ph-monitor"></i>${TIER_LABEL[tier]} output</span>` : '',
+    ].join('');
+    const title = g.art && g.art.logo
+      ? `<img class="logo" id="heroLogo" src="${esc(g.art.logo)}" alt="${esc(g.name)}" draggable="false">`
+      : `<h1>${esc(g.name)}</h1>`;
+    el.innerHTML = `
+      <div class="hero-left">
+        ${title}
+        <div class="meta">${meta}</div>
+        <div class="actions">
+          <span class="${running ? 'beam' : ''}"><button class="liquid-btn" data-act="launch" ${running ? 'disabled' : ''}>
+            <i class="ph-fill ${running ? 'ph-broadcast' : 'ph-play'}"></i><span>${running ? 'Running' : 'Play'}</span></button></span>
+          <button class="btn glassy" data-act="overlay"><i class="ph ph-picture-in-picture"></i>Overlay</button>
+          <button class="icon-btn" data-act="folder" aria-label="Open game folder" title="Open game folder"><i class="ph ph-folder-open"></i></button>
+        </div>
+      </div>
+      <div class="hero-panel glass refract">
+        <div class="seg block tabs" id="tabs" role="tablist" aria-label="Game settings"><span class="th"></span>
+          <button data-v="setup" aria-pressed="${state.tab === 'setup'}">Setup</button>
+          <button data-v="files" aria-pressed="${state.tab === 'files'}">DLSS files</button>
+          <button data-v="resolution" aria-pressed="${state.tab === 'resolution'}">Resolution</button></div>
+        <div class="tab-body" id="tabBody"></div>
+      </div>`;
+    const logo = $('#heroLogo');
+    if (logo) logo.addEventListener('error', () => { logo.replaceWith(Object.assign(document.createElement('h1'), { textContent: g.name })); });
+    Prism.seg($('#tabs'), v => { state.tab = v; renderTab(); });
+    renderTab();
+    Prism.pop($('.hero-left', el)); Prism.pop($('.hero-panel', el), 80);
+  }
+
+  function renderTab() {
+    const g = game(); const body = $('#tabBody');
+    if (!g || !body) return;
+    const cfg = g.cfg || {}, lk = g.looks || {};
+    let html = '';
+    if (state.tab === 'setup') {
+      let looks;
+      if (!lk.installed) {
+        looks = `<p class="note">${lk.reshade ? 'ReShade is already here.' : 'Refract installs ReShade for you'} and adds one light effect, backing up any existing config first.</p>
+          <div class="actions"><button class="btn glassy sm" data-act="install"><i class="ph ph-download-simple"></i>${lk.reshade ? 'Install looks' : 'Install ReShade + looks'}</button></div>`;
+      } else {
+        const start = cfg.startLook || lk.startLook || 'default';
+        looks = `<div class="seg block" id="startSeg" role="group" aria-label="Look at game start"><span class="th"></span>
+            ${LOOKS.map(l => `<button data-v="${l.id}" aria-pressed="${start === l.id}">${esc(l.id === 'natural' ? 'Natural' : l.name)}</button>`).join('')}</div>
+          <p class="note">Starts with this look. Switch live with the overlay or ${esc(state.settings.lookHotkeys.cinematic)} and friends.</p>
+          <div class="actions"><button class="btn ghost sm" data-act="uninstall">Remove looks</button></div>`;
+      }
+      html = `
+        <div class="rise"><div class="row-h"><i class="ph ph-sparkle"></i>DLSS 5</div></div>
+        <div class="dlss5 rise" id="dlss5Block" data-i="1"><div class="skel d5-skel"></div></div>
+        <div class="rise" data-i="2"><div class="row-h"><i class="ph ph-aperture"></i>Looks</div></div>
+        <div class="rise" data-i="3">${looks}</div>
+        <div class="field rise" data-i="4"><label for="nkey">Neural rendering hotkey</label>
+          <div class="glass-in"><i class="ph ph-keyboard"></i><input id="nkey" class="mono" value="${esc(cfg.neuralKey || '')}" placeholder="None" spellcheck="false"></div>
+          <span class="help">The game's own DLSS 5 toggle key, if it has one (NBA 2K27 uses F9). The overlay sends it for you.</span></div>
+        <div class="field rise" data-i="5"><label>Executable to watch</label>
+          <div class="exe tile"><span>${esc(cfg.exe || g.exe || 'Not found')}</span><button class="btn ghost sm" data-act="exe">Change</button></div>
+          <span class="help">Refract restores your resolution when this process exits.</span></div>`;
+    } else if (state.tab === 'files') {
+      html = g.dlls.length ? g.dlls.map((d, i) => `
+        <div class="dll tile rise" data-i="${i}"><span class="f">${esc(d.file)}</span>
+          <span class="d">${esc(d.version || 'unknown')}${d.description ? ' / ' + esc(d.description) : ''}</span>
+          <span class="acts"><button class="btn glassy sm" data-act="swap" data-path="${esc(d.path)}">Replace</button>
+          ${d.backup ? `<button class="btn ghost sm" data-act="restore" data-path="${esc(d.path)}">Restore</button>` : ''}</span></div>`).join('') +
+          '<p class="note rise" data-i="6">Replace takes a DLL you supply from NVIDIA. The original is backed up once and Restore puts it back.</p>'
+        : '<div class="empty"><span class="ic"><i class="ph ph-cpu"></i></span><b>No DLSS runtime here</b><p>Refract searched this folder ten levels deep.</p></div>';
+    } else {
+      const tier = cfg.tier || 'native';
+      html = `
+        <div class="rise"><div class="row-h"><i class="ph ph-monitor"></i>Output resolution while playing</div></div>
+        <div class="seg block rise" data-i="1" id="tierSeg" role="group" aria-label="Output resolution"><span class="th"></span>
+          ${['native', 'balanced', 'performance'].map(t => `<button data-v="${t}" aria-pressed="${tier === t}">${TIER_LABEL[t]}</button>`).join('')}</div>
+        <span class="tier-read rise" data-i="2" id="tierRead"></span>
+        <p class="note rise" data-i="3">DLSS 5 cost follows output resolution, not the DLSS quality mode. Play applies this tier and restores native when the game closes.</p>
+        <div class="actions rise" data-i="4"><button class="btn glassy sm" data-act="try-tier"><i class="ph ph-lightning"></i>Apply now</button>
+          <button class="btn ghost sm" data-act="restore-native">Restore native</button></div>`;
+    }
+    body.innerHTML = html;
+    body.querySelectorAll('.rise[data-i]').forEach(el => el.style.setProperty('--i', el.dataset.i));
+
+    const ss = $('#startSeg', body);
+    if (ss) Prism.seg(ss, async v => { const ng = await call(api.patchGame, g.id, { startLook: v }).catch(() => null); if (ng) Object.assign(g, ng); });
+    const ts = $('#tierSeg', body);
+    if (ts) { Prism.seg(ts, async v => { const ng = await call(api.patchGame, g.id, { tier: v }).catch(() => null); if (ng) { Object.assign(g, ng); tierRead(v); } }); tierRead(g.cfg.tier || 'native'); }
+    const nk = $('#nkey', body);
+    if (nk) nk.addEventListener('change', async () => {
+      const ng = await call(api.patchGame, g.id, { neuralKey: nk.value.trim() || null }).catch(() => null);
+      if (ng) { Object.assign(g, ng); Prism.toast('Hotkey saved', ng.cfg.neuralKey ? 'The overlay toggle sends ' + ng.cfg.neuralKey + '.' : 'Cleared.'); }
+      else nk.value = g.cfg.neuralKey || '';
+    });
+    if (state.tab === 'setup') renderDlss5(g);
+  }
+
+  // DLSS 5 block: upgrade native runtime, or add DLSS 5 (RenoDX) to a game without DLSS.
+  async function renderDlss5(g) {
+    const el = $('#dlss5Block');
+    if (!el) return;
+    let fs;
+    try { fs = await api.feederStatus(g.id); if (!fs.ok) throw 0; fs = fs.data; } catch { fs = null; }
+    if (!el.isConnected || game() !== g) return;
+    let html = '';
+    if (fs && fs.installed) {
+      html = `<div class="d5-row ok"><div><b>DLSS 5 neural rendering active</b><span>RenoDX DLSS is installed. In game: Home &rarr; Add-ons to tune it.</span></div>
+        <button class="btn ghost sm" data-act="feeder-remove">Remove</button></div>`;
+    } else if (fs && fs.already) {
+      html = `<div class="d5-row ok"><div><b>DLSS 5 already set up</b><span>${esc(fs.reason)}</span></div>
+        <button class="btn ghost sm" data-act="go-files">DLSS files</button></div>`;
+    } else if (fs && fs.eligible) {
+      html = `<div class="d5-row"><div><b>Upgrade to DLSS 5</b><span>This game's DLSS can be upgraded to DLSS 5 neural rendering. Your own DLSS files are left untouched.</span></div>
+        <button class="btn glassy sm" data-act="feeder-install"><i class="ph ph-sparkle"></i>Enable DLSS 5</button></div>
+        <div class="d5-prog" id="d5Prog" hidden><div class="d5-bar"><i id="d5Bar"></i></div><span id="d5ProgTxt"></span></div>`;
+    } else {
+      html = `<div class="d5-row"><div><b>DLSS 5 (RenoDX)</b><span>${esc((fs && fs.reason) || 'Not available for this game.')}</span></div></div>`;
+    }
+    // Competing DLSS add-ons in one folder is the classic "it's listed but does nothing" trap.
+    if (fs && fs.warnings && fs.warnings.length && !fs.already) {
+      html += `<div class="d5-row warn"><div><b>Add-on conflict</b><span>${esc(fs.warnings[0])}</span></div></div>`;
+    }
+    // RTX 20/30/40: neural rendering is a Blackwell feature unless a patched runtime is used.
+    if (fs && fs.gpuSupport === 'patch') {
+      const u = fs.unlock || {};
+      const on = !!u.enabled;
+      const own = u.source === 'own' && u.runtime;
+      const using = own ? 'your file (' + esc(String(u.runtime).split(/[\\/]/).pop()) + ')'
+                        : 'the community Universal RTX 20/30/40/50 build';
+      html += `<div class="d5-row ${on ? 'ok' : 'warn'}">
+        <div><b>RTX 20/30/40 unlock &middot; ${on ? 'on' : 'off'}</b><span>${on
+          ? 'Using ' + using + '. This is a patched NVIDIA runtime; expect a large frame-rate cost versus RTX 50.'
+          : 'NVIDIA enables DLSS 5 neural rendering on RTX 50 only. A patched nvngx_dlssnr.dll runs it on this card.'}</span></div>
+        <button class="btn ${on ? 'ghost' : 'glassy'} sm" data-act="${on ? 'unlock-off' : 'unlock-on'}">${on ? 'Turn off' : 'Enable'}</button></div>`;
+      if (on) {
+        html += `<div class="d5-row sub"><div><span>Runtime source: ${using}.</span></div>
+          <button class="btn ghost sm" data-act="pick-patched"><i class="ph ph-key"></i>${own ? 'Change file' : 'Use my own file'}</button></div>`;
+      }
+    }
+    el.innerHTML = html;
+  }
+
+  // Live download/install progress for the DLSS 5 route.
+  api.on('dlss5:progress', p => {
+    const wrap = $('#d5Prog'); if (!wrap) return;
+    wrap.hidden = false;
+    const bar = $('#d5Bar'), txt = $('#d5ProgTxt');
+    const pct = p.frac != null ? Math.round(p.frac * 100) : null;
+    if (bar) bar.style.width = (pct != null ? pct : Math.round((p.phase - 1) / p.of * 100)) + '%';
+    if (txt) txt.textContent = `${p.label} (${p.phase}/${p.of})${pct != null ? ' ' + pct + '%' : ''}`;
+  });
+
+  async function tierRead(tier) {
+    if (!state.ladder) await loadLadder(true);
+    const el = $('#tierRead'); if (!el) return;
+    const r = state.ladder && state.ladder.ladder.find(x => x.id === tier);
+    el.textContent = !r ? '' : r.mode
+      ? `${r.mode.width} x ${r.mode.height} at ${r.mode.hz} Hz${r.mode.pixelSaving ? ', ' + Math.round(r.mode.pixelSaving * 100) + '% fewer pixels' : ''}`
+      : 'Your display has no lower mode with this aspect ratio.';
+  }
+
+  $('#hero').addEventListener('click', async e => {
+    const b = e.target.closest('[data-act]'); if (!b) return;
+    const g = game(); if (!g) return;
+    const act = b.dataset.act;
+    try {
+      if (act === 'launch') { b.disabled = true; await call(api.launch, g.id); Prism.toast('Starting ' + g.name, 'Press ' + state.settings.overlay.hotkey + ' in game for the overlay.'); }
+      else if (act === 'overlay') await call(api.toggleOverlay);
+      else if (act === 'folder') await call(api.openFolder, g.id);
+      else if (act === 'reshade-site') await call(api.openExternal, 'https://reshade.me/');
+      else if (act === 'go-files') { state.tab = 'files'; Prism.set($('#tabs'), 'files'); renderTab(); }
+      else if (act === 'feeder-install') {
+        b.disabled = true;
+        const prog = $('#d5Prog'); if (prog) prog.hidden = false;
+        Prism.toast('Enabling DLSS 5', 'Adding ReShade and the RenoDX DLSS add-on to ' + g.name + '. Your own DLSS files stay as they are.');
+        replaceGame(await call(api.feederInstall, g.id));
+        Prism.toast('DLSS 5 enabled', 'Launch the game, press Home, and open the Add-ons tab to tune neural rendering.');
+      }
+      else if (act === 'feeder-remove') { replaceGame(await call(api.feederRestore, g.id)); Prism.toast('DLSS 5 removed', 'The game folder is back to how it was.'); }
+      else if (act === 'pick-patched') {
+        const r = await call(api.pickPatchedRuntime);
+        if (r && r.runtime) { Prism.toast('Patched runtime set', 'Refract will use your file instead of downloading one.'); renderDlss5(g); }
+      }
+      else if (act === 'unlock-on') {
+        await call(api.patchSettings, { dlss5Unlock: true, dlss5UnlockSource: 'auto' });
+        Prism.toast('RTX 20/30/40 unlock on', 'Refract will fetch the patched neural-rendering runtime when you enable DLSS 5.');
+        renderDlss5(g);
+      }
+      else if (act === 'unlock-off') { await call(api.patchSettings, { dlss5Unlock: false }); renderDlss5(g); }
+      else if (act === 'install') {
+        b.disabled = true; Prism.toast('Installing looks', 'Setting up ReShade for ' + g.name + '.');
+        const ng = await call(api.installLooks, g.id); replaceGame(ng);
+        Prism.toast('Looks installed', 'In game: ' + state.settings.lookHotkeys.cinematic + ' for Cinematic.');
+      }
+      else if (act === 'uninstall') { replaceGame(await call(api.removeLooks, g.id)); Prism.toast('Looks removed', 'Your ReShade preset is back to its own effects.'); }
+      else if (act === 'exe') replaceGame(await call(api.pickExe, g.id));
+      else if (act === 'swap') replaceGame(await call(api.swapDll, g.id, b.dataset.path));
+      else if (act === 'restore') { replaceGame(await call(api.restoreDll, g.id, b.dataset.path)); Prism.toast('Original restored'); }
+      else if (act === 'try-tier') { const m = await call(api.applyTier, g.cfg.tier || 'native'); Prism.toast('Output resolution set', `${m.width} x ${m.height}. Restore native when you are done.`); loadLadder(true); }
+      else if (act === 'restore-native') { await call(api.restoreDisplay); Prism.toast('Native resolution restored'); loadLadder(true); }
+    } catch { if (act === 'launch') b.disabled = false; }
+  });
+
+  // ================================================================ performance
+  const GAUGES = [
+    { id: 'power', label: 'Board power', unit: 'W' },
+    { id: 'load', label: 'GPU load', unit: '%' },
+    { id: 'temp', label: 'Temperature', unit: '°C' },
+    { id: 'vram', label: 'VRAM', unit: 'GB' },
+  ];
+  $('#gauges').innerHTML = GAUGES.map((g, i) => `
+    <div class="gauge tile rise" data-g="${g.id}">
+      <div class="ring"><svg viewBox="0 0 96 96" aria-hidden="true"><circle class="bg" cx="48" cy="48" r="38"/><circle class="fg" cx="48" cy="48" r="38"/></svg>
+        <span class="val" data-pct>-</span></div>
+      <div><small>${g.label}</small><b><span class="odo" data-odo>-</span><em>${g.unit}</em></b><span class="sub" data-sub>&nbsp;</span></div></div>`).join('');
+  $('#gauges').querySelectorAll('.gauge').forEach((el, i) => el.style.setProperty('--i', i));
+
+  function renderTelemetry() {
+    const t = state.telemetry, g = state.gpu || {};
+    const setG = (id, value, frac, sub, hot) => {
+      const el = $(`#gauges [data-g="${id}"]`); if (!el) return;
+      const prev = parseFloat(el.dataset.last);
+      const cur = parseFloat(value);
+      const roll = !Number.isFinite(prev) || !Number.isFinite(cur) || Math.abs(cur - prev) >= Math.max(1, Math.abs(prev) * 0.08);
+      Prism.odo($('[data-odo]', el), value, { roll });
+      if (roll) el.dataset.last = String(cur);
+      Prism.ring($('.fg', el), frac);
+      $('[data-pct]', el).textContent = frac == null ? '-' : Math.round(frac * 100) + '%';
+      $('[data-sub]', el).textContent = sub || ' ';
+      el.classList.toggle('hot', !!hot);
+    };
+    if (!t) return;
+    const pl = t.powerLimit || g.powerLimit;
+    setG('power', t.powerDraw == null ? '-' : Math.round(t.powerDraw), pl && t.powerDraw != null ? t.powerDraw / pl : 0, pl ? `limit ${Math.round(pl)} W` : '', t.powerLimited);
+    setG('load', t.util == null ? '-' : Math.round(t.util), (t.util || 0) / 100, t.pstate ? 'state ' + t.pstate : '');
+    setG('temp', t.temp == null ? '-' : Math.round(t.temp), (t.temp || 0) / 90, t.clock ? Math.round(t.clock) + ' MHz core' : '', t.temp >= 83);
+    setG('vram', t.memUsed == null ? '-' : (t.memUsed / 1024).toFixed(1), t.memTotal ? t.memUsed / t.memTotal : 0, t.memTotal ? `of ${Math.round(t.memTotal / 1024)} GB` : '');
+
+    // dock orb: power headroom at a glance
+    const orb = $('#orbRing');
+    Prism.ring(orb, pl && t.powerDraw != null ? t.powerDraw / pl : 0);
+    orb.style.stroke = t.powerLimited ? 'var(--warn)' : 'var(--accent)';
+    $('#orbVal').textContent = t.util == null ? '-' : Math.round(t.util) + '%';
+    $('#gpuOrb').setAttribute('aria-label', `GPU load ${Math.round(t.util || 0)} percent, ${Math.round(t.powerDraw || 0)} watts`);
+
+    // GL-30 sparkline, last 60 samples
+    if (t.powerDraw != null) { state.powerHist.push(t.powerDraw); if (state.powerHist.length > 60) state.powerHist.shift(); }
+    const top = Math.max((g.powerMax || pl || 300), ...state.powerHist) * 1.05;
+    const H = 120, W = 600, n = state.powerHist.length;
+    if (n > 1) {
+      const pts = state.powerHist.map((v, i) => `${((i + (60 - n)) / 59 * W).toFixed(1)} ${(H - (v / top) * H).toFixed(1)}`);
+      $('#sparkLine').setAttribute('d', 'M' + pts.join(' L'));
+      $('#sparkArea').setAttribute('d', 'M' + pts.join(' L') + ` L${W} ${H} L${((60 - n) / 59 * W).toFixed(1)} ${H} Z`);
+    }
+    if (pl) { const y = (H - (pl / top) * H).toFixed(1); $('#sparkLimit').setAttribute('y1', y); $('#sparkLimit').setAttribute('y2', y); }
+    $('#powerRead').textContent = t.powerDraw == null ? '' : `${t.powerDraw.toFixed(0)} / ${Math.round(pl || 0)} W`;
+    const note = $('#limitNote');
+    note.classList.toggle('hot', !!t.powerLimited);
+    note.textContent = t.powerLimited
+      ? 'At the power limit under full load. This is the usual DLSS 5 bottleneck; a lower output tier helps most.'
+      : 'Dashed line is your power limit. Sitting on it under DLSS 5 means the card is power-bound.';
+    $('.power').classList.toggle('beam', !!t.powerLimited);
+    $('.power').classList.toggle('warn', !!t.powerLimited);
+  }
+
+  async function loadLadder(quiet) {
+    try { const r = await api.ladder(); if (!r.ok) throw new Error(r.error); state.ladder = r.data; }
+    catch (err) { if (!quiet) $('#ladder').innerHTML = `<p class="note">Display modes are unavailable: ${esc(err.message)}</p>`; return; }
+    const { current, ladder } = state.ladder;
+    $('#ladder').innerHTML = ladder.map((r, i) => {
+      const m = r.mode;
+      const active = m && current.width === m.width && current.height === m.height;
+      return `<div class="rung tile rise ${active ? 'active beam' : ''}" data-i="${i}"><b>${r.label}</b>
+        <div><div class="m">${m ? `${m.width} x ${m.height} at ${m.hz} Hz` : 'Not available'}</div>
+        <div class="x">${m ? (m.pixelSaving ? Math.round(m.pixelSaving * 100) + '% fewer pixels to render' : 'Native output') : 'No lower mode with the same aspect ratio'}</div></div>
+        ${m && !active ? `<button class="btn glassy sm" data-tier="${r.id}">Apply</button>` : active ? '<span class="pill ok">Active</span>' : '<span></span>'}</div>`;
+    }).join('');
+    $('#ladder').querySelectorAll('.rung').forEach(el => el.style.setProperty('--i', el.dataset.i));
+  }
+  $('#ladder').addEventListener('click', async e => {
+    const b = e.target.closest('[data-tier]'); if (!b) return;
+    b.disabled = true;
+    try { const m = await call(api.applyTier, b.dataset.tier); Prism.toast('Output resolution set', `${m.width} x ${m.height}. Native comes back when you quit Refract.`); } catch {}
+    loadLadder();
+  });
+  $('#restoreNative').addEventListener('click', async () => { try { await call(api.restoreDisplay); Prism.toast('Native resolution restored'); } catch {} loadLadder(); });
+  $('#overlayBtn').addEventListener('click', () => call(api.toggleOverlay).catch(() => {}));
+
+  // ================================================================ looks
+  let srcImg = null, srcKind = null;
+  const cvB = $('#cvBefore'), cvA = $('#cvAfter');
+
+  function loadImage(url, name, kind) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        const scale = Math.min(1, 1600 / img.width);
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+        srcImg = ctx.getImageData(0, 0, c.width, c.height);
+        srcKind = kind;
+        $('#shotName').textContent = name;
+        cvB.width = cvA.width = c.width; cvB.height = cvA.height = c.height;
+        $('#compare').style.setProperty('--ar', (c.width / c.height).toFixed(4));
+        cvB.getContext('2d').putImageData(srcImg, 0, 0);
+        paint(); renderThumbs();
+        resolve();
+      };
+      img.onerror = () => reject(new Error('Could not load image'));
+      img.src = url;
+    });
+  }
+  async function useArt() {
+    const g = game();
+    const url = g && g.art && (g.art.hero || g.art.header || g.art.capsule);
+    if (!url) return false;
+    await loadImage(url, g.name + ' key art', 'art').catch(() => {});
+    return true;
+  }
+  async function useShot(forGame) {
+    const r = await api.latestScreenshot(forGame ? (game() || {}).id || '' : undefined);
+    if (r && r.ok && r.data) { await loadImage(r.data.dataUrl, r.data.name, 'shot'); return true; }
+    return false;
+  }
+  async function ensureImage() {
+    if (srcKind) return;
+    // This game's own screenshot first (true 16:9 frame), then its key art, then any screenshot.
+    if (!(await useShot(true)) && !(await useArt()) && !(await useShot())) {
+      $('#shotName').textContent = 'No image yet. Choose a screenshot to preview the looks.';
+    }
+  }
+  $('#useArt').addEventListener('click', async () => { if (!(await useArt())) Prism.toast('No key art for this game', 'Pick a Steam game, or choose an image.', 'err'); });
+  $('#useShot').addEventListener('click', async () => { if (!(await useShot(true)) && !(await useShot())) Prism.toast('No Steam screenshots found', 'Take one in game with F12, or choose an image.', 'err'); });
+  $('#pickShot').addEventListener('click', async () => { const s = await call(api.pickScreenshot).catch(() => null); if (s) loadImage(s.dataUrl, s.name, 'file'); });
+
+  let raf = 0;
+  function paint() {
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => {
+      if (!srcImg) return;
+      const out = new ImageData(new Uint8ClampedArray(srcImg.data), srcImg.width, srcImg.height);
+      gradeImage(out, state.look, state.values);
+      cvA.getContext('2d').putImageData(out, 0, 0);
+    });
+  }
+  function renderThumbs() {
+    if (!srcImg) return;
+    const tw = 208, th = 116;
+    const tmp = document.createElement('canvas'); tmp.width = srcImg.width; tmp.height = srcImg.height;
+    tmp.getContext('2d').putImageData(srcImg, 0, 0);
+    document.querySelectorAll('.look-card canvas').forEach(cv => {
+      cv.width = tw; cv.height = th;
+      const ctx = cv.getContext('2d', { willReadFrequently: true });
+      const s = Math.max(tw / srcImg.width, th / srcImg.height);
+      const w = srcImg.width * s, h = srcImg.height * s;
+      ctx.drawImage(tmp, (tw - w) / 2, (th - h) / 2, w, h);
+      const d = ctx.getImageData(0, 0, tw, th);
+      gradeImage(d, cv.dataset.look, state.values);
+      ctx.putImageData(d, 0, 0);
+    });
+  }
+
+  // MO-31 compare handle: pointer + keyboard
+  const cmp = $('#compare'); let dragging = false;
+  const setX = clientX => { const r = cmp.getBoundingClientRect(); cmp.style.setProperty('--x', Math.min(100, Math.max(0, ((clientX - r.left) / r.width) * 100)) + '%'); };
+  cmp.addEventListener('pointerdown', e => { dragging = true; cmp.setPointerCapture(e.pointerId); setX(e.clientX); });
+  cmp.addEventListener('pointermove', e => { if (dragging) setX(e.clientX); });
+  cmp.addEventListener('pointerup', () => { dragging = false; });
+  cmp.addEventListener('keydown', e => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    const cur = parseFloat(getComputedStyle(cmp).getPropertyValue('--x')) || 50;
+    cmp.style.setProperty('--x', Math.min(100, Math.max(0, cur + (e.key === 'ArrowRight' ? 4 : -4))) + '%'); e.preventDefault();
+  });
+
+  $('#lookCards').innerHTML = LOOKS.map(l => `<button class="look-card" role="radio" data-look="${l.id}" aria-checked="${l.id === state.look}">
+      <canvas data-look="${l.id}" width="208" height="116" aria-hidden="true"></canvas><span><b>${esc(l.name)}</b><small>${esc(l.summary)}</small></span></button>`).join('');
+  $('#lookCards').addEventListener('click', e => {
+    const c = e.target.closest('.look-card'); if (!c) return;
+    state.look = c.dataset.look;
+    document.querySelectorAll('.look-card').forEach(x => x.setAttribute('aria-checked', String(x === c)));
+    renderParams(); paint();
+  });
+
+  function renderParams() {
+    const l = LOOKS.find(x => x.id === state.look);
+    const sliders = l.params.map((p, i) => `<div class="slider rise" data-i="${i}"><div class="hd"><label for="p-${p.id}">${esc(p.label)}</label><output id="o-${p.id}">${(+state.values[p.id]).toFixed(p.step < 0.01 ? 3 : 2)}</output></div>
+        <input type="range" id="p-${p.id}" data-id="${p.id}" min="${p.min}" max="${p.max}" step="${p.step}" value="${state.values[p.id]}"></div>`).join('');
+    $('#params').innerHTML = (sliders || '<div class="empty-note rise">Default shows the game exactly as DLSS 5 renders it. Pick Cinematic or Natural Lighting above to grade the image; those have sliders here.</div>') +
+      `<div class="slider rise" data-i="${l.params.length}"><div class="hd"><label for="p-trans">Transition between looks</label><output id="o-trans">${state.transition.toFixed(2)} s</output></div>
+        <input type="range" id="p-trans" min="0" max="2" step="0.05" value="${state.transition}"></div>
+      ${l.params.length ? `<button class="btn ghost sm" id="resetLook"><i class="ph ph-arrow-counter-clockwise"></i>Reset ${esc(l.name)}</button>` : ''}`;
+    $('#params').querySelectorAll('.rise').forEach(el => el.style.setProperty('--i', el.dataset.i || 0));
+    $('#params').querySelectorAll('input[type=range]').forEach(inp => {
+      Prism.sliderFill(inp);
+      inp.addEventListener('input', () => {
+        Prism.sliderFill(inp);
+        if (inp.id === 'p-trans') { state.transition = +inp.value; $('#o-trans').textContent = state.transition.toFixed(2) + ' s'; return; }
+        const p = l.params.find(x => x.id === inp.dataset.id);
+        state.values[p.id] = +inp.value;
+        $('#o-' + p.id).textContent = (+inp.value).toFixed(p.step < 0.01 ? 3 : 2);
+        paint();
+      });
+      inp.addEventListener('change', renderThumbs);
+    });
+    const rs = $('#resetLook');
+    if (rs) rs.addEventListener('click', () => { const d = defaults(); l.params.forEach(p => { state.values[p.id] = d[p.id]; }); renderParams(); paint(); renderThumbs(); });
+    const hk = state.settings ? state.settings.lookHotkeys : {};
+    $('#keys').innerHTML = LOOKS.map(x => `<span>${esc(x.id === 'natural' ? 'Natural' : x.name)} ${(hk[x.id] || '').split('+').map(k => `<kbd>${esc(k)}</kbd>`).join('')}</span>`).join('');
+  }
+  $('#saveLooks').addEventListener('click', async () => {
+    try {
+      const r = await call(api.saveLooks, { values: state.values, startLook: state.settings.startLook, transition: state.transition });
+      Prism.toast('Looks saved', r.updated ? `Updated ${r.updated} game preset${r.updated > 1 ? 's' : ''}. ReShade loads them next launch.` : 'Install looks on a game to use them.');
+    } catch {}
+  });
+
+  // ================================================================ settings
+  function renderSettings() {
+    const s = state.settings;
+    $('#hkOverlay').value = s.overlay.hotkey;
+    $('#hkDefault').value = s.lookHotkeys.default;
+    $('#hkCinematic').value = s.lookHotkeys.cinematic;
+    $('#hkNatural').value = s.lookHotkeys.natural;
+    $('#tgMotion').setAttribute('aria-checked', String(s.ambientMotion !== false));
+    $('#tgRT').setAttribute('aria-checked', String(!!s.reducedTransparency));
+    applyAppearance();
+  }
+  function applyAppearance() {
+    const s = state.settings;
+    document.documentElement.classList.toggle('still', s.ambientMotion === false || !!(state.session && state.session.state === 'running'));
+    if (s.reducedTransparency) document.documentElement.setAttribute('data-transparency', 'reduce');
+    else document.documentElement.removeAttribute('data-transparency');
+  }
+  Prism.toggle($('#tgMotion'), async v => { const r = await call(api.patchSettings, { ambientMotion: v }).catch(() => null); if (r) { state.settings = r.settings; applyAppearance(); } });
+  Prism.toggle($('#tgRT'), async v => { const r = await call(api.patchSettings, { reducedTransparency: v }).catch(() => null); if (r) { state.settings = r.settings; applyAppearance(); } });
+  $('#saveHotkeys').addEventListener('click', async () => {
+    const err = $('#hkErr');
+    const vals = ['#hkOverlay', '#hkDefault', '#hkCinematic', '#hkNatural'].map(id => $(id).value.trim());
+    if (vals.some(v => !v) || new Set(vals.map(v => v.toLowerCase())).size !== vals.length) {
+      err.hidden = false; err.textContent = 'Each hotkey needs a value, and no two can match.'; return;
+    }
+    const r = await call(api.patchSettings, { overlay: { ...state.settings.overlay, hotkey: vals[0] },
+      lookHotkeys: { default: vals[1], cinematic: vals[2], natural: vals[3] } }).catch(() => null);
+    if (!r) return;
+    state.settings = r.settings;
+    if (r.failedShortcuts.length) { err.hidden = false; err.textContent = 'Could not register ' + r.failedShortcuts.join(', ') + '. Another app may be using it.'; }
+    else { err.hidden = true; Prism.toast('Hotkeys saved'); }
+    renderParams();
+  });
+
+  function renderDriver() {
+    const g = state.gpu || {};
+    $('#driverKv').innerHTML = g.available ? `
+      <dt>GPU</dt><dd>${esc(g.name)}</dd>
+      <dt>Driver</dt><dd>${esc(g.driver)} <span class="pill ${g.driverStatus === 'tested' ? 'ok' : g.driverStatus === 'newer' ? '' : 'warn'}">${g.driverStatus === 'tested' ? 'tested' : g.driverStatus === 'newer' ? 'newer than tested' : 'older than ' + esc(g.testedDriver)}</span></dd>
+      <dt>Tested with</dt><dd>${esc(g.testedDriver)}</dd>
+      <dt>DLSS 5</dt><dd>${g.rtx50 ? 'Supported (RTX 50)' : 'Needs an RTX 50 GPU'}</dd>
+      <dt>Power limit</dt><dd>${g.powerLimit ?? '-'} W of ${g.powerMax ?? '-'} W</dd>`
+      : `<dt>GPU</dt><dd>nvidia-smi not found. Install or update the NVIDIA driver.</dd>`;
+  }
+
+  // ================================================================ live events
+  api.on('telemetry', t => { state.telemetry = t; renderTelemetry(); });
+  api.on('session', s => {
+    state.session = s;
+    const el = $('#session');
+    el.hidden = s.state === 'ended';
+    $('#sessionText').textContent = s.state === 'launching' ? 'Starting ' + s.game : 'Playing ' + s.game;
+    if (s.state === 'ended') { Prism.toast('Session ended', 'Desktop resolution restored.'); loadLadder(true); }
+    applyAppearance(); renderHero();
+  });
+  api.on('display', () => loadLadder(true));
+  api.on('settings', s => { state.settings = s; });
+
+  // ================================================================ boot
+  (async function boot() {
+    try {
+      const r = await api.state();
+      const s = r.data;
+      state.settings = s.settings; state.gpu = s.gpu; state.telemetry = s.telemetry;
+      state.values = { ...defaults(), ...s.settings.looks };
+      state.transition = s.settings.transition ?? 0.6;
+      renderSettings(); renderDriver(); renderParams(); renderTelemetry();
+      if (s.games.length) { state.games = s.games; renderShelf(); select((visibleGames()[0] || s.games[0]).id); }
+      else await scan();
+      api.ready({ ok: true, games: state.games.length });
+    } catch (err) {
+      api.ready({ ok: false, error: String(err && err.message || err) });
+    }
+  })();
+})();

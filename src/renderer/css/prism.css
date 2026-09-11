@@ -1,0 +1,285 @@
+/* ============================================================
+   Prism Kit blocks used by Refract. Cherry-picked from kit.json and
+   renamed per AGENTS.md section 3 (root class renamed in markup AND here).
+
+   GLASS      GL-01 Liquid Glass Card ........ .glass (+ ::before rim, ::after specular cap)
+              GL-02 True Refraction .......... .refract  (backdrop-filter:url(#lens))
+              FX-105 Frosted Noise Glass ..... .glass grain layer
+              FX-31 Nested Glass Layers ...... .tile (tint only, no second blur)
+              GL-11 Glass Input Group ........ .glass-in
+              GL-08 Glass Segmented Control .. .seg           (js: Prism.seg)
+              GL-19 Liquid Button Morph ...... .liquid-btn
+              GL-12/GL-04 Sidebar + Dock ..... .dock          (js: Prism.dock, MO-27 indicator)
+              GL-25 Card Grid Hover .......... .spot          (js: Prism.pointer)
+              GL-06 Glass Toast + MO-26 stack  .toasts/.toast (js: Prism.toast)
+              GL-33 Glass Empty State ........ .empty
+              GL-30 Metric Sparkline ......... .spark
+   EFFECTS    FX-12 Ken Burns ................ .stage-bg .art
+              FX-122 Animated Mesh Gradient .. .stage-bg .mesh
+              FX-72 Legibility Scrim ......... .stage-bg .scrim
+              FX-06 Film Grain ............... .grain
+              FX-26 Border Beam .............. .beam
+              FX-107 Border Follows Cursor ... .spot::before
+              FX-44 3D Tilt Card ............. .tilt           (js: Prism.pointer)
+              FX-119 Masked Scroll Fade ...... .fade-x
+              FX-25 Shimmer Skeleton ......... .skel
+              FX-61 Glass Morph Toggle ....... .toggle         (js: Prism.toggle)
+   MOTION     MO-13 Progress Ring ............ .ring
+              MO-55 Odometer ................. .odo            (js: Prism.odo)
+              MO-31 Draggable Compare ........ .compare        (js: app)
+              MO-33 Checkmark Draw ........... .check
+              MO-37 Breathing Glow ........... .breath
+              MO-40 Staggered Grid Entrance .. .rise           (--i index)
+              MO-56 Elastic Entrance ......... Prism.pop (WAAPI)
+              MO-22 View Transitions ......... Prism.swap
+   ELEMENTS   EL-01 Buttons .btn, EL-11 Slider .slider, EL-12 Pill .pill, EL-32 kbd, EL-62 focus
+   ============================================================ */
+
+/* ---------- GL-01 + FX-105: liquid glass, four layers + rim + specular cap + grain */
+.glass{
+  position:relative;isolation:isolate;border-radius:var(--r-lg);
+  background:linear-gradient(135deg,rgba(255,255,255,.075),rgba(255,255,255,.02)),var(--g-bg);
+  -webkit-backdrop-filter:blur(var(--g-blur)) saturate(180%) brightness(1.04);
+  backdrop-filter:blur(var(--g-blur)) saturate(180%) brightness(1.04);
+  box-shadow:
+    inset 1px 1px 1px var(--g-hi),                       /* lit rim   */
+    inset -1px -1px 1px var(--g-lo),                     /* dim rim   */
+    inset 0 -22px 30px -26px rgba(255,255,255,.28),      /* specular  */
+    0 24px 60px -28px var(--g-cast);                     /* cast      */
+}
+.glass::before{content:"";position:absolute;inset:0;border-radius:inherit;padding:1px;pointer-events:none;z-index:-1;
+  background:linear-gradient(140deg,rgba(255,255,255,.55),rgba(255,255,255,.06) 30%,transparent 62%,rgba(255,255,255,.22));
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}
+.glass::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:-1;opacity:.34;mix-blend-mode:overlay;
+  background:
+    radial-gradient(120% 60% at 12% -10%,rgba(255,255,255,.22),transparent 55%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+.glass.strong{background:linear-gradient(135deg,rgba(255,255,255,.07),rgba(255,255,255,.015)),var(--g-bg-strong)}
+
+/* ---------- GL-02: true refraction (Chromium). Blur+tint above remains the floor. */
+.refract{-webkit-backdrop-filter:url(#lens) blur(calc(var(--g-blur) * .55)) saturate(185%) brightness(1.05);
+  backdrop-filter:url(#lens) blur(calc(var(--g-blur) * .55)) saturate(185%) brightness(1.05)}
+:root[data-transparency="reduce"] .refract{backdrop-filter:none;-webkit-backdrop-filter:none}
+
+/* ---------- FX-31: nested layer inside glass: tint only (blur budget) */
+.tile{position:relative;border-radius:var(--r-md);background:rgba(255,255,255,.045);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.08),inset 0 0 0 1px rgba(255,255,255,.04)}
+
+/* ---------- svg defs holder */
+.svg-defs{position:absolute;width:0;height:0;overflow:hidden}
+
+/* ---------- Stage backdrop: FX-122 mesh + FX-12 Ken Burns art + FX-72 scrim */
+.stage-bg{position:fixed;inset:0;z-index:-2;overflow:hidden;background:var(--bg)}
+.stage-bg .mesh i{position:absolute;width:62vmax;aspect-ratio:1;border-radius:50%;filter:blur(90px);opacity:.55;will-change:transform}
+.stage-bg .mesh .a{background:#6b3f12;left:-18vmax;top:-22vmax;animation:mesh-a 26s ease-in-out infinite alternate}
+.stage-bg .mesh .b{background:#1f3a52;right:-20vmax;top:-10vmax;animation:mesh-b 32s ease-in-out infinite alternate}
+.stage-bg .mesh .c{background:#123b36;left:10vmax;bottom:-34vmax;animation:mesh-c 22s ease-in-out infinite alternate}
+.stage-bg .mesh .d{background:#3a2a10;right:0;bottom:-30vmax;animation:mesh-a 29s ease-in-out infinite alternate-reverse}
+@keyframes mesh-a{to{transform:translate(9vmax,6vmax) scale(1.18)}}
+@keyframes mesh-b{to{transform:translate(-8vmax,9vmax) scale(.88)}}
+@keyframes mesh-c{to{transform:translate(-10vmax,-6vmax) scale(1.14)}}
+.stage-bg .art{position:absolute;inset:-3%;width:106%;height:106%;object-fit:cover;opacity:0;
+  transition:opacity 1.1s var(--e-out);filter:saturate(1.08) contrast(1.04);will-change:transform,opacity;
+  animation:kenburns 48s ease-in-out infinite alternate}
+.stage-bg .art.on{opacity:1}
+@keyframes kenburns{0%{transform:scale(1) translate(0,0)}100%{transform:scale(1.12) translate(-2.2%,1.4%)}}
+.stage-bg .scrim{position:absolute;inset:0;
+  background:
+    linear-gradient(90deg,rgba(7,8,10,.92) 0%,rgba(7,8,10,.62) 34%,rgba(7,8,10,.18) 62%,rgba(7,8,10,.5) 100%),
+    linear-gradient(0deg,rgba(7,8,10,.96) 0%,rgba(7,8,10,.6) 30%,transparent 58%),
+    linear-gradient(180deg,rgba(7,8,10,.55) 0%,transparent 16%)}
+:root.calm .stage-bg .art,:root.calm .stage-bg .mesh i,:root.still .stage-bg .art,:root.still .stage-bg .mesh i{animation-play-state:paused}
+
+/* ---------- FX-06: film grain, fixed and click-through */
+.grain{position:fixed;inset:0;z-index:50;pointer-events:none;opacity:.07;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+
+/* ---------- GL-11: glass input group */
+.glass-in{display:flex;align-items:center;gap:10px;min-height:42px;padding:0 14px;border-radius:var(--r-sm);
+  background:rgba(255,255,255,.07);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.14),inset 0 2px 6px rgba(0,0,0,.18);transition:box-shadow .3s,background .3s}
+.glass-in:focus-within{background:rgba(255,255,255,.1);box-shadow:inset 0 1px 0 rgba(255,255,255,.22),0 0 0 2px color-mix(in oklab,var(--accent) 70%,transparent)}
+.glass-in i{color:var(--text-2);font-size:17px}
+.glass-in input{flex:1;min-width:0;border:0;background:transparent;outline:0;font:400 14px var(--ui);color:var(--text)}
+.glass-in input::placeholder{color:var(--text-3)}
+
+/* ---------- GL-08: segmented control with a liquid thumb */
+.seg{position:relative;display:inline-flex;padding:4px;border-radius:14px;
+  background:rgba(255,255,255,.06);box-shadow:inset 0 1px 0 rgba(255,255,255,.1),inset 0 2px 8px rgba(0,0,0,.28)}
+.seg button{position:relative;z-index:2;flex:1;border:0;background:transparent;min-height:36px;padding:0 16px;border-radius:10px;
+  font:500 13px var(--ui);color:var(--text-2);cursor:pointer;white-space:nowrap;transition:color .35s var(--e-out)}
+.seg button:hover{color:var(--text)}
+.seg button[aria-pressed="true"]{color:var(--accent-ink)}
+.seg .th{position:absolute;top:4px;bottom:4px;left:0;border-radius:10px;z-index:1;
+  background:linear-gradient(180deg,color-mix(in oklab,var(--accent) 92%,#fff),var(--accent));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.55),inset 0 -6px 10px -8px rgba(0,0,0,.35),0 6px 16px -6px color-mix(in oklab,var(--accent) 75%,transparent);
+  transition:transform .55s var(--e-back),width .55s var(--e-back)}
+.seg.block{display:flex;width:100%}
+
+/* ---------- GL-19: liquid button morph (primary CTA) + sheen */
+.liquid-btn{position:relative;isolation:isolate;overflow:hidden;display:inline-flex;align-items:center;justify-content:center;gap:10px;
+  min-height:48px;padding:0 30px;border:0;border-radius:99px;cursor:pointer;white-space:nowrap;
+  font:600 14.5px var(--ui);letter-spacing:-.005em;color:var(--accent-ink);
+  background:linear-gradient(180deg,color-mix(in oklab,var(--accent) 88%,#fff),var(--accent) 60%,color-mix(in oklab,var(--accent) 85%,#000));
+  box-shadow:inset 1px 1px 1px rgba(255,255,255,.7),inset -1px -1px 1px rgba(0,0,0,.15),
+    inset 0 -14px 18px -14px rgba(0,0,0,.35),0 14px 34px -12px color-mix(in oklab,var(--accent) 70%,transparent);
+  transition:border-radius .6s var(--e-back),transform .45s var(--e-back),filter .3s}
+.liquid-btn i{font-size:19px}
+.liquid-btn:hover{border-radius:20px;transform:scale(1.04);filter:brightness(1.05)}
+.liquid-btn:active{transform:scale(.97);border-radius:30px}
+.liquid-btn::after{content:"";position:absolute;top:-60%;left:-60%;width:46%;height:220%;transform:rotate(20deg);z-index:-1;
+  background:linear-gradient(100deg,transparent,rgba(255,255,255,.55),transparent);transition:transform 0s}
+.liquid-btn:hover::after{transform:rotate(20deg) translateX(460%);transition:transform .95s var(--e-out)}
+.liquid-btn[disabled]{filter:grayscale(.6) brightness(.8);cursor:not-allowed;transform:none}
+
+/* ---------- FX-26: border beam (semantic: live / active / warning) */
+.beam{position:relative;overflow:hidden}
+.beam::before{content:"";position:absolute;width:140px;aspect-ratio:1;z-index:0;pointer-events:none;
+  offset-path:rect(0 100% 100% 0 round var(--beam-r,22px));offset-distance:0%;translate:-50% -50%;
+  background:radial-gradient(closest-side,var(--beam-c,var(--accent)),transparent);opacity:.95;
+  animation:beam-run var(--beam-t,5s) linear infinite}
+.beam > *{position:relative;z-index:1}
+@keyframes beam-run{to{offset-distance:100%}}
+.beam.warn{--beam-c:var(--warn)}
+
+/* ---------- GL-25 + FX-107: spotlight fill and rim that follow the pointer */
+.spot{position:relative}
+.spot::before{content:"";position:absolute;inset:0;border-radius:inherit;padding:1.5px;pointer-events:none;z-index:3;opacity:0;transition:opacity .35s;
+  background:radial-gradient(200px circle at var(--mx,50%) var(--my,50%),color-mix(in oklab,var(--accent) 95%,#fff),transparent 70%);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}
+.spot::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:2;opacity:0;transition:opacity .35s;
+  background:radial-gradient(220px circle at var(--mx,50%) var(--my,50%),rgba(255,255,255,.18),transparent 65%)}
+.spot:hover::before,.spot:hover::after{opacity:1}
+
+/* ---------- FX-44: 3D tilt with glare */
+.tilt{transform:perspective(900px) rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg)) translateY(var(--lift,0px));
+  transition:transform .2s ease-out;will-change:transform}
+
+/* ---------- FX-119: masked horizontal fade for scrollers */
+.fade-x{-webkit-mask-image:linear-gradient(90deg,transparent,#000 3%,#000 94%,transparent);mask-image:linear-gradient(90deg,transparent,#000 3%,#000 94%,transparent)}
+
+/* ---------- FX-25: shimmer skeleton */
+.skel{position:relative;overflow:hidden;border-radius:var(--r-md);background:rgba(255,255,255,.06)}
+.skel::after{content:"";position:absolute;inset:0;transform:translateX(-100%);
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.12),transparent);animation:skel-s 1.4s infinite}
+@keyframes skel-s{100%{transform:translateX(100%)}}
+
+/* ---------- FX-61: glass morph toggle */
+.toggle{position:relative;width:62px;height:34px;flex:0 0 62px;border-radius:99px;cursor:pointer;padding:0;
+  background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);box-shadow:inset 0 2px 6px rgba(0,0,0,.3);transition:background .4s}
+.toggle i{position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:99px;background:#F4F5F6;
+  box-shadow:0 3px 10px rgba(0,0,0,.4),inset 0 -3px 5px rgba(0,0,0,.12);transition:transform .5s var(--e-back),background .4s}
+.toggle[aria-checked="true"]{background:color-mix(in oklab,var(--accent) 70%,transparent);border-color:color-mix(in oklab,var(--accent) 80%,#fff)}
+.toggle[aria-checked="true"] i{transform:translateX(28px)}
+
+/* ---------- MO-13: progress ring */
+.ring{position:relative;display:grid;place-items:center}
+.ring svg{width:100%;height:100%;transform:rotate(-90deg);overflow:visible}
+.ring .bg{fill:none;stroke:rgba(255,255,255,.08)}
+.ring .fg{fill:none;stroke:var(--ring-c,var(--accent));stroke-linecap:round;
+  transition:stroke-dashoffset 1.1s var(--e-out),stroke .4s;filter:drop-shadow(0 0 6px color-mix(in oklab,var(--ring-c,var(--accent)) 55%,transparent))}
+.ring .val{position:absolute;inset:0;display:grid;place-items:center;text-align:center}
+
+/* ---------- MO-55: odometer digits */
+.odo{display:inline-flex;font-variant-numeric:tabular-nums;line-height:1}
+.odo .dg{height:1em;overflow:hidden;width:.6em;text-align:center}
+.odo .dg i{display:block;font-style:normal;transition:transform .45s var(--e-out)}
+.odo.instant .dg i{transition:none}
+.odo .sep{width:.3em;text-align:center}
+
+/* ---------- MO-31: draggable compare */
+.compare{position:relative;overflow:hidden;cursor:ew-resize;touch-action:none;user-select:none;--x:50%}
+.compare canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+.compare .before{clip-path:inset(0 0 0 var(--x))}
+.compare .handle{position:absolute;top:0;bottom:0;left:var(--x);width:2px;background:rgba(255,255,255,.9);box-shadow:0 0 14px rgba(0,0,0,.5);pointer-events:none}
+.compare .handle span{position:absolute;top:50%;left:50%;translate:-50% -50%;width:46px;height:46px;border-radius:99px;display:grid;place-items:center;
+  color:var(--text);font-size:20px;background:rgba(20,22,26,.4);-webkit-backdrop-filter:blur(14px) saturate(180%);backdrop-filter:blur(14px) saturate(180%);
+  box-shadow:inset 1px 1px 1px rgba(255,255,255,.5),0 8px 22px rgba(0,0,0,.45);transition:transform .3s var(--e-back)}
+.compare:active .handle span{transform:scale(1.12)}
+
+/* ---------- MO-33: check draw */
+.check{width:22px;height:22px;overflow:visible}
+.check circle{fill:none;stroke:var(--ok);stroke-width:2;stroke-dasharray:126;stroke-dashoffset:126;animation:chk-c .7s cubic-bezier(.65,0,.35,1) forwards}
+.check path{fill:none;stroke:var(--ok);stroke-width:3.2;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:26;stroke-dashoffset:26;animation:chk-p .45s .45s cubic-bezier(.65,0,.35,1) forwards}
+@keyframes chk-c{to{stroke-dashoffset:0}}
+@keyframes chk-p{to{stroke-dashoffset:0}}
+
+/* ---------- MO-37: breathing glow (live state only) */
+.breath{display:inline-block;width:8px;height:8px;border-radius:99px;background:var(--breath-c,var(--ok));
+  animation:breath 2.8s ease-in-out infinite}
+@keyframes breath{0%,100%{box-shadow:0 0 0 0 color-mix(in oklab,var(--breath-c,var(--ok)) 55%,transparent);transform:scale(.9)}
+  50%{box-shadow:0 0 0 6px transparent,0 0 14px 2px color-mix(in oklab,var(--breath-c,var(--ok)) 60%,transparent);transform:scale(1.1)}}
+
+/* ---------- MO-40: staggered entrance */
+.rise{animation:rise .7s var(--e-out) backwards;animation-delay:calc(var(--i,0) * 45ms)}
+@keyframes rise{from{opacity:0;transform:translateY(22px) scale(.94)}}
+
+/* ---------- GL-06 + MO-26: toast stack */
+.toasts{position:fixed;right:22px;bottom:22px;z-index:60;display:flex;flex-direction:column-reverse;gap:10px;pointer-events:none}
+.toast{pointer-events:auto;display:flex;gap:12px;align-items:center;min-width:280px;max-width:420px;padding:13px 16px;border-radius:18px;
+  animation:toast-in .55s var(--e-back)}
+.toast.out{animation:toast-out .4s var(--e-inout) forwards}
+@keyframes toast-in{from{opacity:0;transform:translateX(30px) scale(.94)}}
+@keyframes toast-out{to{opacity:0;transform:translateX(30px) scale(.94)}}
+.toast .ic{width:34px;height:34px;flex:0 0 34px;border-radius:12px;display:grid;place-items:center;font-size:18px;background:rgba(255,255,255,.08)}
+.toast.err .ic{color:var(--crit)}
+.toast b{display:block;font:600 13.5px var(--ui);color:var(--text)}
+.toast small{display:block;font:400 12.5px/1.4 var(--ui);color:var(--text-2)}
+
+/* ---------- GL-33: empty state */
+.empty{display:grid;justify-items:center;text-align:center;gap:6px;padding:34px 28px}
+.empty .ic{width:58px;height:58px;margin-bottom:8px;border-radius:18px;display:grid;place-items:center;font-size:26px;color:var(--text);
+  background:rgba(255,255,255,.08);box-shadow:inset 0 1px 0 rgba(255,255,255,.18);animation:float 5s ease-in-out infinite}
+@keyframes float{0%,100%{transform:translateY(0) rotate(-4deg)}50%{transform:translateY(-6px) rotate(4deg)}}
+.empty b{font:600 17px var(--display);color:var(--text)}
+.empty p{margin:0 0 12px;font:400 13.5px/1.55 var(--ui);color:var(--text-2);max-width:40ch}
+
+/* ---------- GL-30: sparkline */
+.spark{width:100%;height:120px;display:block;overflow:visible}
+.spark .line{fill:none;stroke:var(--accent);stroke-width:2.2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.spark .area{fill:url(#sparkFill)}
+.spark .limit{stroke:rgba(255,255,255,.35);stroke-dasharray:5 6;stroke-width:1;vector-effect:non-scaling-stroke}
+
+/* ---------- EL-01: buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px;padding:0 16px;border-radius:var(--r-sm);
+  border:0;font:500 13.5px var(--ui);cursor:pointer;white-space:nowrap;color:var(--text);
+  transition:transform .3s var(--e-back),background .25s,box-shadow .25s,color .25s}
+.btn i{font-size:17px}
+.btn:hover{transform:translateY(-1px)}
+.btn:active{transform:translateY(0) scale(.97)}
+.btn.glassy{background:rgba(255,255,255,.08);
+  box-shadow:inset 1px 1px 1px rgba(255,255,255,.22),inset -1px -1px 1px rgba(255,255,255,.05),0 8px 20px -12px rgba(0,0,0,.6)}
+.btn.glassy:hover{background:rgba(255,255,255,.13)}
+.btn.ghost{background:transparent;color:var(--text-2)}
+.btn.ghost:hover{background:rgba(255,255,255,.07);color:var(--text)}
+.btn.danger{background:transparent;color:var(--crit);box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--crit) 45%,transparent)}
+.btn.sm{min-height:32px;padding:0 12px;font-size:12.5px;border-radius:10px}
+.btn[disabled]{opacity:.45;cursor:not-allowed;transform:none}
+.icon-btn{width:42px;height:42px;border-radius:var(--r-sm);border:0;display:grid;place-items:center;cursor:pointer;color:var(--text-2);font-size:19px;
+  background:rgba(255,255,255,.07);box-shadow:inset 1px 1px 1px rgba(255,255,255,.16);
+  transition:transform .3s var(--e-back),color .2s,background .2s}
+.icon-btn:hover{color:var(--text);background:rgba(255,255,255,.12);transform:translateY(-1px)}
+.icon-btn.spin i{animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ---------- EL-11: slider */
+.slider{display:grid;gap:6px}
+.slider .hd{display:flex;justify-content:space-between;align-items:baseline;font:500 13px var(--ui);color:var(--text)}
+.slider .hd output{color:var(--text-2);font:500 12px var(--mono);font-variant-numeric:tabular-nums}
+.slider input{width:100%;height:6px;border-radius:99px;appearance:none;-webkit-appearance:none;outline:0;cursor:pointer;margin:8px 0;
+  background:linear-gradient(90deg,var(--accent) var(--p,50%),rgba(255,255,255,.12) var(--p,50%));box-shadow:inset 0 1px 2px rgba(0,0,0,.4)}
+.slider input::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;border-radius:99px;background:#F6F6F6;
+  box-shadow:0 0 0 4px color-mix(in oklab,var(--accent) 35%,transparent),0 3px 8px rgba(0,0,0,.45);transition:transform .25s var(--e-back)}
+.slider input::-webkit-slider-thumb:hover{transform:scale(1.15)}
+
+/* ---------- EL-12 pill, EL-32 kbd */
+.pill{display:inline-flex;align-items:center;gap:6px;min-height:26px;padding:0 10px;border-radius:99px;font:500 12px var(--ui);white-space:nowrap;
+  background:rgba(255,255,255,.09);color:var(--text);box-shadow:inset 0 1px 0 rgba(255,255,255,.12)}
+.pill i{font-size:14px}
+.pill.mono{font:500 11.5px var(--mono)}
+.pill.ok{color:var(--ok)}.pill.warn{color:var(--warn)}.pill.crit{color:var(--crit)}.pill.acc{color:var(--accent)}
+kbd{display:inline-block;font:500 11px var(--mono);min-width:24px;text-align:center;padding:3px 7px;border-radius:7px;color:var(--text);
+  background:rgba(255,255,255,.08);box-shadow:inset 0 1px 0 rgba(255,255,255,.14),inset 0 -2px 0 rgba(0,0,0,.35)}
+
+/* ---------- EL-62: focus */
+:where(a,button,input,select,[tabindex]):focus-visible{outline:2px solid var(--accent);outline-offset:3px}
