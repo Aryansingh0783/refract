@@ -6,7 +6,7 @@ const { defaults } = require('../shared/looks');
 const DEFAULTS = {
   version: 1,
   manualDirs: [],
-  games: {},            // id -> { tier, exe, neuralKey, lastLook }
+  games: {},            // id -> { tier, exe, neuralKey, lastLook, engine: 'ingame' | 'screen' }
   looks: defaults(),    // shader parameter values
   startLook: 'default',
   transition: 0.6,
@@ -19,6 +19,8 @@ const DEFAULTS = {
   reducedTransparency: false,
   feederPayloadDir: null,
   nativeMode: null,     // desktop mode captured before Refract changed it
+  // The bundled NeuralScreen engine (screen-space DLSS 5).
+  neuralScreen: { profile: 'Natural', faster: false, workScale: 0.65 },
 };
 
 class Store {
@@ -29,7 +31,8 @@ class Store {
       const saved = JSON.parse(fs.readFileSync(this.file, 'utf8'));
       this.data = { ...this.data, ...saved, looks: { ...this.data.looks, ...(saved.looks || {}) },
         overlay: { ...this.data.overlay, ...(saved.overlay || {}) },
-        lookHotkeys: { ...this.data.lookHotkeys, ...(saved.lookHotkeys || {}) } };
+        lookHotkeys: { ...this.data.lookHotkeys, ...(saved.lookHotkeys || {}) },
+        neuralScreen: { ...this.data.neuralScreen, ...(saved.neuralScreen || {}) } };
       // Move anyone still on the old Alt+Shift defaults to the new ones.
       if (this.data.overlay.hotkey === 'Alt+Shift+R') this.data.overlay.hotkey = DEFAULTS.overlay.hotkey;
       for (const [k, v] of Object.entries(this.data.lookHotkeys)) {

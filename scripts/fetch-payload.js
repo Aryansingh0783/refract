@@ -5,7 +5,8 @@
 //
 //   node scripts/fetch-payload.js            # reuse the download cache, rebuild ./payload
 //
-// Cache: %APPDATA%\Refract (shared with the app) unless REFRACT_BUILD_CACHE is set.
+// Cache: %APPDATA%\Refract (shared with the app) unless REFRACT_BUILD_CACHE is set. To skip the
+// 224 MB NeuralScreen download, drop neuralscreen-v1.6.0-full.zip into <cache>\dlss5\ (hash-checked).
 const fs = require('fs');
 const path = require('path');
 const assets = require('../src/core/dlss5assets');
@@ -63,12 +64,21 @@ const prog = label => {
   for (const f of assets.listFiles(lum, /\.fxh$/i)) put(f, 'lumenite/Shaders/include/' + path.basename(f));
   for (const f of assets.listFiles(lum, /\.(png|jpe?g)$/i)) put(f, 'lumenite/Textures/' + path.basename(f));
 
-  log('Universal RTX 20/30/40/50 DLSS-NR runtime');
-  put(await assets.ensurePatchedRuntime(CACHE, prog('dlss-nr')), 'ngx/nvngx_dlssnr.dll');
+  // NeuralScreen: the screen-space engine, and the source of the universal RTX 30/40/50
+  // neural-rendering runtime both engines use (one copy, at neuralscreen/native/).
+  log('NeuralScreen ' + assets.SOURCES.neuralscreen.version + ' (screen engine + universal RTX 30/40/50 DLSS-NR runtime)');
+  await assets.ensureUniversalRuntime(CACHE, prog('neuralscreen')); // downloads + verifies the DLL inside
+  const ns = await assets.ensureUnpacked(CACHE, 'neuralscreen');
+  for (const f of assets.walkFiles(ns)) {
+    const rel = path.relative(ns, f).split(path.sep).join('/');
+    if (/^(\.extracted|NeuralScreen\.log|recordings\/|screenshots\/)/i.test(rel)) continue;
+    put(f, 'neuralscreen/' + rel);
+  }
+  if (files[assets.NR_REL] !== assets.UNIVERSAL_NR_SHA256) throw new Error('bundled nvngx_dlssnr.dll is not the universal build');
 
   log('Streamline / NGX runtime (feeder route)');
   for (const f of await assets.ensureStreamline(CACHE)) {
-    if (/^nvngx_dlssnr\.dll$/i.test(path.basename(f))) continue; // the universal build above replaces the stock one
+    if (/^nvngx_dlssnr\.dll$/i.test(path.basename(f))) continue; // the universal build (neuralscreen/native) replaces the stock one
     put(f, 'streamline/' + path.basename(f));
   }
 

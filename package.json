@@ -1,8 +1,8 @@
 {
   "name": "refract",
   "productName": "Refract",
-  "version": "0.2.0",
-  "description": "DLSS 5 companion: installs DLSS 5 (RenoDX) for RTX 20/30/40/50 with everything bundled, manages runtimes, governs output resolution, and applies glass in-game look presets.",
+  "version": "0.3.0",
+  "description": "DLSS 5 companion: installs DLSS 5 (RenoDX) in-game or runs it screen-space (NeuralScreen) on RTX 30/40/50, with everything bundled.",
   "author": "Refract",
   "main": "src/main.js",
   "license": "MIT",

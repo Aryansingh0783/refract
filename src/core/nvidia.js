@@ -18,9 +18,10 @@ function num(v) {
   return Number.isFinite(n) ? n : null;
 }
 
-// DLSS 5 neural rendering ships enabled only on Blackwell (RTX 50). Turing/Ampere/Ada
-// (RTX 20/30/40) can run it with a patched nvngx_dlssnr.dll, which Refract never
-// redistributes — the user supplies their own, exactly as the upstream unlock mods require.
+// DLSS 5 neural rendering ships enabled only on Blackwell (RTX 50). Ampere and Ada (RTX 30/40)
+// run it with the universal 310.8 runtime Refract bundles: it carries sm_86/sm_89 kernels and
+// its architecture gate accepts 0x170/0x190. Turing (RTX 20, 0x160) is refused by that same
+// gate in every known build, so it is reported as unsupported rather than promised.
 const ARCH = { 20: 'Turing', 30: 'Ampere', 40: 'Ada Lovelace', 50: 'Blackwell' };
 function gpuGeneration(name) {
   const m = /\bRTX\s*(\d{4})\b/i.exec(name || '');
@@ -30,12 +31,12 @@ function gpuGeneration(name) {
   return { family: 'rtx', model, series, arch: ARCH[series] || null };
 }
 
-// 'native' = works as shipped; 'patch' = needs a patched neural-rendering runtime;
-// 'unsupported' = no DLSS hardware at all.
+// 'native' = works as shipped; 'patch' = needs the universal neural-rendering runtime;
+// 'unsupported' = cannot run DLSS 5 neural rendering (GTX, RTX 20 and older).
 function dlss5Support(gen) {
   if (gen.family !== 'rtx' || !gen.series) return 'unsupported';
   if (gen.series >= 50) return 'native';
-  if (gen.series >= 20) return 'patch';
+  if (gen.series >= 30) return 'patch';
   return 'unsupported';
 }
 
@@ -52,8 +53,10 @@ function parseInfo(line) {
     dlss5,
     // Honest expectation setting: neural rendering on pre-Blackwell is heavy.
     dlss5Note: dlss5 === 'patch'
-      ? `DLSS 5 neural rendering is not enabled for ${gen.arch || 'this card'} by default. It can run with a patched runtime, but expect a large frame-rate cost on RTX ${gen.series} series.`
-      : null,
+      ? `DLSS 5 neural rendering is not enabled for ${gen.arch || 'this card'} by default. Refract's universal runtime runs it, but expect a large frame-rate cost on RTX ${gen.series} series.`
+      : gen.series === 20
+        ? 'RTX 20 (Turing) cannot run DLSS 5 neural rendering: every available runtime refuses the Turing architecture.'
+        : null,
     driverStatus: cmp === 0 ? 'tested' : cmp > 0 ? 'newer' : 'older',
     testedDriver: TESTED_DRIVER,
   };

@@ -383,3 +383,36 @@ test('bundle.js refuses a bundled file whose hash does not match the manifest', 
   try { assert.strictEqual(bundle.file('ngx/nvngx_dlssnr.dll'), null); }
   finally { delete process.env.REFRACT_PAYLOAD; bundle._reset(); fs.rmSync(base, { recursive: true, force: true }); }
 });
+
+// ---------------------------------------------------------------- runtime generations
+test('GPU tiers follow what the runtimes can actually run: RTX 30/40/50 yes, RTX 20 no', () => {
+  const nvidia = require('../src/core/nvidia');
+  const tier = n => nvidia.parseInfo(`NVIDIA GeForce ${n}, 616.92, 200, 250, 12288`);
+  assert.strictEqual(tier('RTX 5070').dlss5, 'native');
+  assert.strictEqual(tier('RTX 4070').dlss5, 'patch');
+  assert.strictEqual(tier('RTX 3060').dlss5, 'patch');
+  const turing = tier('RTX 2080 Ti');
+  assert.strictEqual(turing.dlss5, 'unsupported');
+  assert.match(turing.dlss5Note, /Turing/);
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-tu-'));
+  const dir = path.join(base, 'g'); gameWithDlss(dir);
+  const p = feeder.plan(dir, { bitness: 64, api: 'dxgi', dx: 12, gpu: { ...turing, name: 'NVIDIA GeForce RTX 2080 Ti' } });
+  assert.strictEqual(p.ok, false);
+  assert.match(p.reason, /Turing/);
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('the bundled runtime is the universal build, and 0.2\'s Ada-only build is repaired on RTX 30/40', () => {
+  const assets = require('../src/core/dlss5assets');
+  assert.strictEqual(assets.UNIVERSAL_NR_SHA256, 'dcc0dc2414aedec4a8e084647070383be068554042587180c20c784d4772d36f');
+  assert.notStrictEqual(assets.LEGACY_NR_SHA256, assets.UNIVERSAL_NR_SHA256);
+  assert.strictEqual(assets.NR_REL, 'neuralscreen/native/nvngx_dlssnr.dll');
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-legacy-'));
+  const dir = path.join(base, 'g'); gameWithDlss(dir);
+  fs.writeFileSync(path.join(dir, 'nvngx_dlssnr.dll'), 'ADA-ONLY-0.2'); // any build that isn't the universal one
+  const ada = { name: 'NVIDIA GeForce RTX 4070', dlss5: 'patch', series: 40, arch: 'Ada Lovelace' };
+  assert.strictEqual(feeder.nrNeeded(dir, { gpu: AMPERE }), true, 'RTX 30 gets the universal build');
+  assert.strictEqual(feeder.nrNeeded(dir, { gpu: ada }), true, 'RTX 40 gets it too');
+  assert.strictEqual(feeder.nrNeeded(dir, { gpu: BLACKWELL }), false, 'RTX 50 keeps what already works');
+  fs.rmSync(base, { recursive: true, force: true });
+});

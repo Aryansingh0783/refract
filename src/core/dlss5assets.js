@@ -39,17 +39,16 @@ const SOURCES = {
     name: 'streamline.zip', kind: 'zip', version: 'latest',
     sha256: '5389d164ef99a0e4aba5128da2e87d26de5833aeaf89bfeb0232cfdc8f7229a2',
   },
-  // The neural-rendering runtime every DLSS 5 route needs (nvngx_dlssnr.dll). This is the
-  // community "Universal RTX 20/30/40/50 DLSS-NR" build: NVIDIA's 310.8.0.0 binary patched in
-  // place (same size and version, different hash) so it also runs on Turing/Ampere/Ada.
-  // Verified live on an RTX 5070 (Cyberpunk 2077, NR evaluating every frame). It is a modified
-  // proprietary binary; users can point Refract at their own file instead.
-  dlssnrPatched: {
-    url: 'https://github.com/reiluisii/1-Click-DLSS5/releases/download/v3.0.2/1-Click-DLSS5-v3.0.2.zip',
-    name: '1-Click-DLSS5-v3.0.2.zip', kind: 'zip', version: '3.0.2',
-    sha256: '193e1d90a60c43830b37018efdd1f89590e1959fbc6d0774ebc6e8c6b22fd99f',
-    // Verified hash of the extracted nvngx_dlssnr.dll inside that archive.
-    innerSha256: '4b8d19bc3eff58a084f5eca7489c921501c203450169fb82ff4f649a4482ba05',
+  // The neural-rendering runtime every DLSS 5 route needs (nvngx_dlssnr.dll), taken from the
+  // NeuralScreen release, which Refract also bundles whole as its screen-space engine.
+  // NVIDIA's 310.8.0 build with sm_75/86/89/120 kernels and an architecture gate that accepts
+  // Ampere, Ada and Blackwell (Turing is still refused), so one file serves RTX 30/40/50.
+  // A modified proprietary binary; users can point Refract at their own file instead.
+  neuralscreen: {
+    url: 'https://github.com/perseval-BLR/DLSS5-NeuralScreen/releases/download/v1.6.0/neuralscreen-v1.6.0-full.zip',
+    name: 'neuralscreen-v1.6.0-full.zip', kind: 'zip', version: '1.6.0',
+    sha256: '0e36f9bcb863044ec8e3740469a430df5b24d8adf9271c77c9c8dcf5b2d70fe8',
+    innerSha256: 'dcc0dc2414aedec4a8e084647070383be068554042587180c20c784d4772d36f',
   },
 };
 
@@ -175,8 +174,8 @@ async function ensurePayload(cacheRoot, { bitness = 64, route = 'native' } = {},
   out.reshadeDll = b('reshade/ReShade64.dll') || await rt.ensureReShade(cacheRoot, { addon: true, bitness });
 
   n++; step('Neural-rendering runtime');
-  out.nvngxNrUniversal = b('ngx/nvngx_dlssnr.dll') || await ensurePatchedRuntime(cacheRoot, p => step('Neural-rendering runtime', p && p.frac));
-  out.versions.dlssnr = SOURCES.dlssnrPatched.version;
+  out.nvngxNrUniversal = b(NR_REL) || await ensureUniversalRuntime(cacheRoot, p => step('Neural-rendering runtime', p && p.frac));
+  out.versions.dlssnr = '310.8.0 (NeuralScreen ' + SOURCES.neuralscreen.version + ')';
 
   if (needs.includes('renodx5')) {
     n++; step('RenoDX DLSS 5 add-on');
@@ -234,24 +233,29 @@ async function ensurePayload(cacheRoot, { bitness = 64, route = 'native' } = {},
   return out;
 }
 
-// The patched neural-rendering runtime that lets RTX 20/30/40 run DLSS 5. Only called when
-// the user has explicitly enabled the unlock. Verified twice: the archive, then the DLL.
-async function ensurePatchedRuntime(cacheRoot, onProgress) {
-  const bundled = bundle.file('ngx/nvngx_dlssnr.dll');
+// Where the bundled runtime lives: inside the bundled NeuralScreen app, which loads it from
+// its own native folder, so both engines share one 158 MB file.
+const NR_REL = 'neuralscreen/native/nvngx_dlssnr.dll';
+
+// The universal neural-rendering runtime (RTX 30/40/50). Bundled first; the download is the
+// fallback for a dev checkout. Verified twice: the archive, then the DLL inside it.
+async function ensureUniversalRuntime(cacheRoot, onProgress) {
+  const bundled = bundle.file(NR_REL);
   if (bundled) return bundled;
-  const a = SOURCES.dlssnrPatched;
+  const a = SOURCES.neuralscreen;
   const step = (label, frac) => onProgress && onProgress({ phase: 1, of: 1, label, frac });
-  step('Patched DLSS-NR runtime (RTX 20/30/40)');
-  const dir = await ensureUnpacked(cacheRoot, 'dlssnrPatched', f => step('Patched DLSS-NR runtime (RTX 20/30/40)', f));
-  const dll = findFile(dir, /^nvngx_dlssnr\.dll$/i);
-  if (!dll) throw new Error('The unlock package did not contain nvngx_dlssnr.dll.');
-  if (a.innerSha256) {
-    const got = digest(fs.readFileSync(dll));
-    if (got !== a.innerSha256) throw new Error(`Patched nvngx_dlssnr.dll checksum mismatch (expected ${a.innerSha256}, got ${got}).`);
-  }
+  step('Neural-rendering runtime (RTX 30/40/50)');
+  const dir = await ensureUnpacked(cacheRoot, 'neuralscreen', f => step('Neural-rendering runtime (RTX 30/40/50)', f));
+  const dll = walkFiles(dir).find(p => /[\\/]native[\\/]nvngx_dlssnr\.dll$/i.test(p));
+  if (!dll) throw new Error('The NeuralScreen package did not contain native/nvngx_dlssnr.dll.');
+  const got = digest(fs.readFileSync(dll));
+  if (got !== a.innerSha256) throw new Error(`nvngx_dlssnr.dll checksum mismatch (expected ${a.innerSha256}, got ${got}).`);
   return dll;
 }
 
-const UNIVERSAL_NR_SHA256 = SOURCES.dlssnrPatched.innerSha256;
+const UNIVERSAL_NR_SHA256 = SOURCES.neuralscreen.innerSha256;
+// Refract 0.2 shipped 1-Click-DLSS5's build: sm_89/sm_120 kernels only and an architecture gate
+// that refuses Ampere ("Unsupported GPU architecture 0x170"). Fine on RTX 40/50, useless on RTX 30.
+const LEGACY_NR_SHA256 = '4b8d19bc3eff58a084f5eca7489c921501c203450169fb82ff4f649a4482ba05';
 
-module.exports = { ensurePayload, ensureStreamline, ensureFile, ensureUnpacked, ensurePatchedRuntime, ensureShaderHeaders, listFiles, findFile, SOURCES, SHADER_HEADERS, UNIVERSAL_NR_SHA256 };
+module.exports = { ensurePayload, ensureStreamline, ensureFile, ensureUnpacked, ensureUniversalRuntime, ensurePatchedRuntime: ensureUniversalRuntime, ensureShaderHeaders, listFiles, findFile, walkFiles, SOURCES, SHADER_HEADERS, NR_REL, UNIVERSAL_NR_SHA256, LEGACY_NR_SHA256 };

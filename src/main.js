@@ -12,6 +12,7 @@ const reshade = require('./core/reshade');
 const feeder = require('./core/feeder');
 const { ladder } = require('./core/display');
 const { Session } = require('./core/session');
+const { NeuralScreen, PROFILES: NS_PROFILES, HOTKEYS: NS_HOTKEYS } = require('./core/neuralscreen');
 const { LOOKS, KEYCODES } = require('./shared/looks');
 
 const SELFTEST = process.argv.includes('--selftest');
@@ -24,7 +25,7 @@ if (!SELFTEST && !RESTORE_ALL && !app.requestSingleInstanceLock()) { app.quit();
 protocol.registerSchemesAsPrivileged([{ scheme: 'refract-art',
   privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }]);
 
-let store, win, session;
+let store, win, session, neural;
 let mainWin = null, overlayWin = null;
 let games = [];
 let gpu = { available: false };
@@ -295,12 +296,34 @@ function handle(ch, fn) {
   });
 }
 
+function neuralInfo() {
+  const av = neural.available(gpu);
+  return { available: av.ok, reason: av.reason || null, version: neural.version(), state: neural.state(),
+    settings: store.get().neuralScreen, profiles: NS_PROFILES, hotkeys: NS_HOTKEYS };
+}
+
+// Games set to the screen engine get NeuralScreen started when their window appears and
+// stopped when the session ends (only if Refract started it for that game).
+async function onSessionEvent(ch, d) {
+  if (ch !== 'session' || !neural || !d) return;
+  try {
+    if (d.state === 'running') {
+      const g = session.active && session.active.game;
+      if (g && store.game(g.id).engine === 'screen' && neural.available(gpu).ok) {
+        await neural.start({ ...store.get().neuralScreen, gpu }, g.name);
+      }
+    } else if (d.state === 'ended' && neural.startedFor && neural.startedFor === d.game) {
+      await neural.stop();
+    }
+  } catch (e) { broadcast('neuralscreen', { state: 'error', error: String(e && e.message || e) }); }
+}
+
 function registerIpc() {
   handle('app:state', async () => ({
     settings: store.get(), gpu, telemetry: lastTelemetry, games: games.map(publicGame),
     looks: LOOKS, currentLook, platform: process.platform, selftest: SELFTEST,
     session: session.active ? { state: session.active.seen ? 'running' : 'launching', game: session.active.game.name } : null,
-    hotkeys: activeHotkeys, payload: require('./core/bundle').info(),
+    hotkeys: activeHotkeys, payload: require('./core/bundle').info(), neuralScreen: neuralInfo(),
   }));
 
   handle('library:scan', async () => {
@@ -328,6 +351,7 @@ function registerIpc() {
       allowed.neuralKey = patch.neuralKey ? String(patch.neuralKey).toUpperCase() : null;
     }
     if (patch.startLook) allowed.startLook = patch.startLook;
+    if (patch.engine) allowed.engine = patch.engine === 'screen' ? 'screen' : 'ingame';
     store.patchGame(id, allowed);
     const g = findGame(id);
     if (allowed.startLook && g.looks && g.looks.installed) {
@@ -431,7 +455,7 @@ function registerIpc() {
   });
   handle('library:restoreEverything', async () => restoreEverything());
 
-  // The patched neural-rendering runtime for RTX 20/30/40. The user supplies their own file;
+  // An alternative neural-rendering runtime for RTX 30/40. The user supplies their own file;
   // Refract only records where it is.
   handle('dlss5:pickPatchedRuntime', async () => {
     const r = await dialog.showOpenDialog(mainWin, {
@@ -491,6 +515,15 @@ function registerIpc() {
     return !!on;
   });
   handle('session:end', async () => session.end('user'));
+
+  // ---- NeuralScreen (screen-space DLSS 5 engine)
+  handle('neuralscreen:status', async () => neuralInfo());
+  handle('neuralscreen:start', async gameId => {
+    const g = gameId ? findGame(gameId) : null;
+    await neural.start({ ...store.get().neuralScreen, gpu }, g ? g.name : null);
+    return neuralInfo();
+  });
+  handle('neuralscreen:stop', async () => { await neural.stop(); return neuralInfo(); });
   handle('app:onboarded', async () => { store.patch({ onboarded: true }); return true; });
 
   handle('game:openFolder', async id => { const e = await shell.openPath(findGame(id).dir); if (e) throw new Error(e); return true; });
@@ -556,6 +589,13 @@ function registerIpc() {
   handle('settings:patch', async p => {
     const allowed = {};
     for (const k of ['overlay', 'lookHotkeys', 'transition', 'reducedTransparency', 'ambientMotion', 'dlss5Unlock', 'dlss5PatchedRuntime', 'dlss5UnlockSource']) if (k in p) allowed[k] = p[k];
+    if (p.neuralScreen) {
+      const n = p.neuralScreen, cur = store.get().neuralScreen;
+      allowed.neuralScreen = { ...cur,
+        ...(NS_PROFILES.includes(n.profile) ? { profile: n.profile } : {}),
+        ...('faster' in n ? { faster: !!n.faster } : {}),
+        ...(Number.isFinite(+n.workScale) ? { workScale: Math.min(1, Math.max(0.3, +n.workScale)) } : {}) };
+    }
     store.patch(allowed);
     const failed = registerShortcuts();
     broadcast('settings', store.get());
@@ -580,7 +620,8 @@ app.whenReady().then(async () => {
   app.setAppUserModelId('com.refract.app');
   store = new Store(app.getPath('userData'));
   win = new WinHelper(path.join(__dirname, '..', 'scripts', 'winhelper.ps1'));
-  session = new Session(win, store, broadcast);
+  session = new Session(win, store, (ch, d) => { broadcast(ch, d); onSessionEvent(ch, d); });
+  neural = new NeuralScreen({ home: path.join(app.getPath('userData'), 'neuralscreen'), emit: broadcast });
   nativeTheme.themeSource = 'dark';
   protocol.handle('refract-art', req => serveArt(req).catch(() => new Response('error', { status: 500 })));
   if (RESTORE_ALL) {
@@ -618,6 +659,7 @@ app.on('before-quit', async e => {
   globalShortcut.unregisterAll();
   if (stopTelemetry) stopTelemetry();
   await session.shutdown().catch(() => {});
+  if (neural && neural.startedFor) await neural.stop().catch(() => {});
   win.stop();
   app.quit();
 });

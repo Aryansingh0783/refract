@@ -57,9 +57,16 @@ function list(prefix) {
   return Object.keys(b.manifest.files).filter(r => r.startsWith(prefix)).map(file).filter(Boolean);
 }
 
+// Cheap presence check (listed in the manifest and on disk) without hashing — for status
+// displays; file() still verifies before anything is used.
+function has(rel) {
+  const b = load();
+  return !!(b && b.manifest.files[rel] && fs.existsSync(path.join(b.root, ...rel.split('/'))));
+}
+
 function info() {
   const b = load();
   return b ? { root: b.root, components: b.manifest.components || {}, files: Object.keys(b.manifest.files).length } : null;
 }
 
-module.exports = { file, list, info, sha256File, _reset: () => { cached = undefined; } };
+module.exports = { file, list, has, info, sha256File, _reset: () => { cached = undefined; } };

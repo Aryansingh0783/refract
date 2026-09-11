@@ -161,16 +161,30 @@ async function run(ctx) {
     const bundle = require('./core/bundle');
     const info = bundle.info();
     if (!info) return { ok: false, detail: 'no payload found (run npm run payload, or reinstall)' };
-    const need = ['reshade/ReShade64.dll', 'addons/renodx-dlss5.addon64', 'addons/dlss5-bridge.addon64', 'ngx/nvngx_dlssnr.dll',
-      'feeder/dlss5-feed.addon64', 'feeder/DLSS5_Feed.fx', 'feeder/headers/ReShade.fxh'];
+    const assets = require('./core/dlss5assets');
+    const need = ['reshade/ReShade64.dll', 'addons/renodx-dlss5.addon64', 'addons/dlss5-bridge.addon64', assets.NR_REL,
+      'feeder/dlss5-feed.addon64', 'feeder/DLSS5_Feed.fx', 'feeder/headers/ReShade.fxh',
+      'neuralscreen/main.py', 'neuralscreen/runtime/pythonw.exe', 'neuralscreen/native/nvngx.dll'];
     const bad = need.filter(r => !bundle.file(r));
+    const nr = bundle.file(assets.NR_REL);
+    const nrOk = !!nr && bundle.sha256File(nr) === assets.UNIVERSAL_NR_SHA256;
     const lumenite = bundle.list('lumenite/Shaders/').length, streamline = bundle.list('streamline/').length;
-    return { ok: bad.length === 0 && lumenite > 0 && streamline > 0, detail: { root: info.root, files: info.files, bad, lumenite, streamline, components: info.components } };
+    return { ok: bad.length === 0 && nrOk && lumenite > 0 && streamline > 0, detail: { root: info.root, files: info.files, bad, nrUniversal: nrOk, lumenite, streamline, components: info.components } };
+  });
+
+  await check('neuralscreen engine (bundled, RTX 30/40/50)', async () => {
+    const { NeuralScreen } = require('./core/neuralscreen');
+    const ns = new NeuralScreen({ home: path.join(os.tmpdir(), 'refract-selftest-ns') });
+    const src = ns.source({ verify: true });
+    const av = ns.available(ctx.gpu);
+    const cmd = ns.command();
+    const ok = !!src && fs.existsSync(path.join(src, 'runtime', 'pythonw.exe')) && /pythonw\.exe$/.test(cmd.file) && cmd.args.includes('--config');
+    return { ok: ok && (av.ok || (ctx.gpu && ctx.gpu.dlss5 === 'unsupported')), detail: { src, version: ns.version(), available: av, gpu: ctx.gpu && ctx.gpu.name } };
   });
 
   await check('gpu-dlss5-tier (RTX 20/30/40 vs 50)', async () => {
     const cases = [['NVIDIA GeForce RTX 5070', 'native', 50], ['NVIDIA GeForce RTX 3060', 'patch', 30],
-      ['NVIDIA GeForce RTX 4090', 'patch', 40], ['NVIDIA GeForce GTX 1080 Ti', 'unsupported', null]];
+      ['NVIDIA GeForce RTX 4090', 'patch', 40], ['NVIDIA GeForce RTX 2080 Ti', 'unsupported', 20], ['NVIDIA GeForce GTX 1080 Ti', 'unsupported', null]];
     const got = cases.map(([n]) => { const i = nvidia.parseInfo(n + ', 616.92, 250, 300, 12288'); return [i.dlss5, i.series]; });
     const ok = cases.every(([, tier, series], k) => got[k][0] === tier && got[k][1] === series);
     return { ok, detail: { live: ctx.gpu && { name: ctx.gpu.name, series: ctx.gpu.series, arch: ctx.gpu.arch, dlss5: ctx.gpu.dlss5 }, cases: got } };
@@ -221,7 +235,15 @@ async function run(ctx) {
       shots.push(f);
     }
     await wc.executeJavaScript(`document.querySelector('.dock [data-view="library"]').click()`);
-    return { ok: true, detail: shots };
+    // The Neural Screen panel sits below the DLSS 5 block in the Setup tab.
+    await sleep(1400);
+    const ns = await wc.executeJavaScript(`(() => { const b = document.querySelector('#nsBlock'); if (!b) return null; b.scrollIntoView({ block: 'start' }); return { html: b.innerHTML.length, start: !!b.querySelector('[data-ns]'), auto: !!b.querySelector('#nsAuto'), profiles: b.querySelectorAll('#nsProfile button').length }; })()`);
+    await sleep(700);
+    const nsShot = path.join(out, 'screen-neuralscreen.png');
+    fs.writeFileSync(nsShot, (await wc.capturePage()).toPNG());
+    shots.push(nsShot);
+    const nsOk = !ctx.gpu || ctx.gpu.dlss5 === 'unsupported' || !!(ns && ns.start && ns.auto && ns.profiles === 4);
+    return { ok: nsOk, detail: { shots, neuralScreenPanel: ns } };
   });
 
   await check('overlay (opens interactive, closes on second press)', async () => {
