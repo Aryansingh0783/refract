@@ -13,6 +13,7 @@
     settings: null, gpu: null, games: [], selected: null, filter: 'dlss', q: '', scanning: false,
     telemetry: null, powerHist: [], ladder: null, tab: 'setup', view: 'library',
     look: 'cinematic', values: defaults(), transition: 0.6, session: null, hotkeys: null,
+    neural: null, // NeuralScreen engine status (main: neuralInfo)
   };
 
   async function call(fn, ...args) {
@@ -231,6 +232,8 @@
       html = `
         <div class="rise"><div class="row-h"><i class="ph ph-sparkle"></i>DLSS 5</div></div>
         <div class="dlss5 rise" id="dlss5Block" data-i="1"><div class="skel d5-skel"></div></div>
+        <div class="rise" data-i="1"><div class="row-h"><i class="ph ph-monitor"></i>Neural Screen</div></div>
+        <div class="dlss5 rise" id="nsBlock" data-i="1"></div>
         <div class="rise" data-i="2"><div class="row-h"><i class="ph ph-aperture"></i>Looks</div></div>
         <div class="rise" data-i="3">${looks}</div>
         <div class="field rise" data-i="4"><label for="nkey">Neural rendering hotkey</label>
@@ -271,7 +274,7 @@
       if (ng) { Object.assign(g, ng); Prism.toast('Hotkey saved', ng.cfg.neuralKey ? 'The overlay toggle sends ' + ng.cfg.neuralKey + '.' : 'Cleared.'); }
       else nk.value = g.cfg.neuralKey || '';
     });
-    if (state.tab === 'setup') renderDlss5(g);
+    if (state.tab === 'setup') { renderDlss5(g); renderNeural(g); }
   }
 
   // DLSS 5 block: upgrade native runtime, or add DLSS 5 (RenoDX) to a game without DLSS.
@@ -308,7 +311,7 @@
       html = `<div class="d5-row"><div><b>${fs.route === 'feeder' ? 'Add DLSS 5' : 'Upgrade to DLSS 5'}</b><span>${esc(fs.routeLabel || '')}. Everything ships inside Refract; your game's own files are backed up, never overwritten.</span></div>
         <button class="btn glassy sm" data-act="feeder-install"><i class="ph ph-sparkle"></i>Enable DLSS 5</button></div>${progress}`;
     } else {
-      html = `<div class="d5-row"><div><b>DLSS 5 isn't available here</b><span>${esc((fs && fs.reason) || 'Not available for this game.')}</span></div></div>`;
+      html = `<div class="d5-row"><div><b>DLSS 5 can't go into this game</b><span>${esc((fs && fs.reason) || 'Not available for this game.')}${state.neural && state.neural.available ? ' Neural Screen below can still process it from the screen.' : ''}</span></div></div>`;
     }
     // Competing DLSS add-ons in one folder is the classic "it's listed but does nothing" trap.
     if (fs && fs.warnings && fs.warnings.length && !fs.already) {
@@ -323,12 +326,86 @@
         ? `${card}: DLSS 5 neural rendering is supported natively.`
         : u.enabled === false
           ? `${card}: the universal neural-rendering runtime is switched off, so DLSS 5 stays off on this card.`
-          : `${card}: Refract installs the universal RTX 20/30/40/50 neural-rendering runtime${own ? ' (your own file)' : ''} so DLSS 5 runs here. Expect a bigger frame-rate cost than on RTX 50.`;
+          : `${card}: Refract installs the universal RTX 30/40/50 neural-rendering runtime${own ? ' (your own file)' : ''} so DLSS 5 runs here. Expect a bigger frame-rate cost than on RTX 50.`;
       html += `<div class="d5-row sub"><div><span>${text}</span></div>${fs.gpuSupport === 'patch'
         ? `<button class="btn ghost sm" data-act="${u.enabled === false ? 'unlock-on' : 'pick-patched'}">${u.enabled === false ? 'Turn on' : own ? 'Change file' : 'Use my own file'}</button>` : ''}</div>`;
     }
     el.innerHTML = html;
   }
+
+  // Neural Screen: the bundled NeuralScreen engine. It processes the screen, not the game, so
+  // it covers games the in-game route can't take and changes nothing in the game folder.
+  async function loadNeural() {
+    try { const r = await api.neuralStatus(); if (r && r.ok) state.neural = r.data; } catch {}
+    return state.neural;
+  }
+  function neuralLine(n) {
+    const st = n.state || {};
+    if (!st.running) return '';
+    const parts = [st.game ? 'Running for ' + esc(st.game) : 'Running'];
+    if (st.nr === 'failed') parts.push('<b>neural rendering could not start on this GPU</b>');
+    else if (st.fps) parts.push(st.fps.toFixed(0) + ' FPS', st.nr === 'off' ? 'NR paused (Num1)' : 'NR on');
+    else parts.push('warming up');
+    return `<div class="d5-row sub ns-live"><div><span><i class="ph ph-circle ns-dot${st.nr === 'failed' ? ' bad' : ''}"></i>${parts.join(' · ')}</span></div></div>`;
+  }
+  async function renderNeural(g) {
+    const el = $('#nsBlock');
+    if (!el) return;
+    const n = state.neural || await loadNeural();
+    if (!el.isConnected || game() !== g) return;
+    if (!n) { el.innerHTML = ''; return; }
+    if (!n.available) { el.innerHTML = `<div class="d5-row sub"><div><span>${esc(n.reason || 'Not available.')}</span></div></div>`; return; }
+    const st = n.state || {};
+    const auto = (g.cfg && g.cfg.engine) === 'screen';
+    const both = g.modified && g.modified.includes('DLSS 5');
+    const ns = n.settings || {};
+    el.innerHTML = `
+      <div class="d5-row"><div><b>Screen-space DLSS 5</b><span>NeuralScreen ${esc(n.version || '')} runs NVIDIA's neural renderer on what is on screen instead of inside the game, so it also works on Vulkan, 32-bit and no-DLSS games. Nothing in the game folder changes.</span></div>
+        <button class="btn glassy sm" data-ns="${st.running ? 'stop' : 'start'}"><i class="ph ${st.running ? 'ph-stop' : 'ph-play'}"></i>${st.running ? 'Stop' : 'Start now'}</button></div>
+      ${neuralLine(n)}
+      <label class="ns-check"><input type="checkbox" id="nsAuto" ${auto ? 'checked' : ''}> Start it automatically when I play this game, stop it when I quit</label>
+      <div class="seg block" id="nsProfile" role="group" aria-label="Neural Screen strength"><span class="th"></span>
+        ${n.profiles.map(p => `<button data-v="${esc(p)}" aria-pressed="${ns.profile === p}">${esc(p.split(' / ')[0])}</button>`).join('')}</div>
+      <label class="ns-check"><input type="checkbox" id="nsFaster" ${ns.faster ? 'checked' : ''}> Faster: run the network at reduced resolution (about 50% more FPS, edges stay sharp)</label>
+      ${both ? '<div class="d5-row warn"><div><b>Pick one</b><span>DLSS 5 is also installed in this game. Running both applies neural rendering twice; use Restore original or leave Neural Screen off here.</span></div></div>' : ''}
+      <ol class="d5-steps">
+        <li>Set the game to <b>Borderless</b> or windowed. Nothing can draw over exclusive fullscreen.</li>
+        <li><b>Num Lock on</b>: <kbd>Num2</kbd> menu, <kbd>Num1</kbd> neural rendering on/off, <kbd>Num5</kbd> only the window under the cursor, <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Q</kbd> quits.</li>
+        <li>HDR displays aren't supported: switch to SDR (<kbd>Win</kbd>+<kbd>Alt</kbd>+<kbd>B</kbd>). Adds about 40–60 ms of latency.</li>
+        <li>Not for online games with anti-cheat: a screen overlay plus an <code>nvngx.dll</code> process is what they look for.</li></ol>`;
+    const ap = $('#nsAuto', el);
+    ap.addEventListener('change', async () => {
+      const ng = await call(api.patchGame, g.id, { engine: ap.checked ? 'screen' : 'ingame' }).catch(() => null);
+      if (ng) { Object.assign(g, ng); Prism.toast(ap.checked ? 'Neural Screen on for ' + g.name : 'Neural Screen off for ' + g.name, ap.checked ? 'It starts when the game window appears and stops when you quit.' : ''); }
+      else ap.checked = !ap.checked;
+    });
+    Prism.seg($('#nsProfile', el), async v => { const r = await call(api.patchSettings, { neuralScreen: { profile: v } }).catch(() => null); if (r) { state.settings = r.settings; state.neural.settings = r.settings.neuralScreen; } });
+    const fa = $('#nsFaster', el);
+    fa.addEventListener('change', async () => { const r = await call(api.patchSettings, { neuralScreen: { faster: fa.checked } }).catch(() => null); if (r) { state.settings = r.settings; state.neural.settings = r.settings.neuralScreen; } });
+    el.querySelector('[data-ns]').addEventListener('click', async e => {
+      const b = e.currentTarget; b.disabled = true;
+      try {
+        if (b.dataset.ns === 'start') {
+          Prism.toast('Starting Neural Screen', 'The first start copies the engine (a few seconds). Settings apply on the next start.');
+          state.neural = await call(api.neuralStart, g.id);
+        } else state.neural = await call(api.neuralStop);
+      } catch {} finally { renderNeural(g); }
+    });
+  }
+  api.on('neuralscreen', async ev => {
+    if (ev && ev.state === 'preparing') return;
+    await loadNeural();
+    if (ev && ev.state === 'stopped' && ev.reason === 'already-running') Prism.toast('NeuralScreen is already running', 'Close the other copy (Ctrl+Alt+Q) and start it again.', 'err');
+    else if (ev && ev.state === 'error') Prism.toast('Neural Screen did not start', ev.error, 'err');
+    const g = game(); if (g && state.tab === 'setup') renderNeural(g);
+  });
+  // FPS/status refresh while it runs and the Setup tab is showing.
+  setInterval(async () => {
+    if (!state.neural || !state.neural.state || !state.neural.state.running || state.tab !== 'setup' || document.hidden) return;
+    await loadNeural();
+    const el = $('#nsBlock .ns-live'), n = state.neural;
+    if (el && n) { const html = neuralLine(n); if (html) el.outerHTML = html; else { const g = game(); if (g) renderNeural(g); } }
+  }, 3000);
 
   // Live download/install progress for the DLSS 5 route.
   api.on('dlss5:progress', p => {
@@ -717,6 +794,7 @@
       const r = await api.state();
       const s = r.data;
       state.settings = s.settings; state.gpu = s.gpu; state.telemetry = s.telemetry; state.hotkeys = s.hotkeys || null;
+      state.neural = s.neuralScreen || null;
       if (s.session) { state.session = s.session; $('#session').hidden = false; $('#sessionText').textContent = (s.session.state === 'launching' ? 'Starting ' : 'Playing ') + s.session.game; }
       if (!s.settings.onboarded && !s.selftest) setTimeout(openGuide, 600);
       state.values = { ...defaults(), ...s.settings.looks };

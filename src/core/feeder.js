@@ -108,7 +108,9 @@ function plan(exeDir, opts = {}) {
   }
   if (gpu && gpu.dlss5 === 'unsupported') {
     return { ok: false, route: null, actions: [], warnings, inspect: i,
-      reason: `${gpu.name || 'This GPU'} has no DLSS hardware. DLSS 5 needs an RTX card.` };
+      reason: gpu.series === 20
+        ? `${gpu.name || 'RTX 20'} (Turing) can't run DLSS 5 neural rendering: every available runtime refuses Turing. RTX 30, 40 and 50 cards are supported.`
+        : `${gpu.name || 'This GPU'} has no DLSS hardware. DLSS 5 needs an RTX 30, 40 or 50 card.` };
   }
   if (gpu && gpu.dlss5 === 'patch' && unlock && unlock.enabled === false) {
     warnings.push(`RTX ${gpu.series} (${gpu.arch}): the universal neural-rendering runtime is switched off, so DLSS 5 will stay off on this card. Turn it back on in the DLSS 5 panel.`);
@@ -231,10 +233,10 @@ async function install(game, payload, { cacheRoot, onProgress, gpu = null, unloc
 // Every DLSS 5 route needs NVIDIA's neural-rendering runtime, nvngx_dlssnr.dll, next to the
 // game. Stock games don't ship it — without it the add-on logs "nvngx_dlssnr.dll was not
 // found ... NR stays off" and the game looks untouched. Refract provides the universal
-// RTX 20/30/40/50 build (verified running on RTX 50; the stock NVIDIA file only runs on
-// RTX 50). Rules:
+// RTX 30/40/50 build (sm_86/89/120 kernels; its architecture gate accepts Ampere and Ada).
+// Stock NVIDIA files and Refract 0.2's Ada-only build refuse RTX 30. Rules:
 //   missing                         -> add the universal build (or the user's own file)
-//   present, RTX 20/30/40           -> must be the universal (or user's) build; replace, backed up
+//   present, RTX 30/40              -> must be the universal (or user's) build; replace, backed up
 //   present, RTX 50 / unknown GPU   -> keep whatever works there
 //   user switched the runtime off   -> leave the folder alone and say why NR stays off
 async function provisionNr(man, exeDir, payload, { gpu, unlock, cacheRoot, onProgress }) {
