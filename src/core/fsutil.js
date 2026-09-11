@@ -6,6 +6,9 @@ const path = require('path');
 // skip asset folders that never hold DLSS runtimes, and stop after maxEntries.
 const SKIP = new Set(['__overlay', 'redist', '_commonredist', 'directx', 'vcredist', 'movies',
   'content', 'paks', 'textures', 'shadercache', 'logs', 'saves', 'screenshots', '.git']);
+// Other tools' backup copies (e.g. the DLSS 5 Swapper's _DLSS5_Backup\originals) hold stale
+// ReShade.ini / DLSS files that must never be mistaken for the live ones.
+const SKIP_RE = /backup/i;
 
 async function walk(root, { maxDepth = 5, maxEntries = 40000, match } = {}) {
   const hits = [];
@@ -18,7 +21,7 @@ async function walk(root, { maxDepth = 5, maxEntries = 40000, match } = {}) {
       if (++seen > maxEntries) return;
       const p = path.join(dir, d.name);
       if (d.isDirectory()) {
-        if (!SKIP.has(d.name.toLowerCase())) await rec(p, depth + 1);
+        if (!SKIP.has(d.name.toLowerCase()) && !SKIP_RE.test(d.name)) await rec(p, depth + 1);
       } else if (match(d.name, p)) hits.push(p);
     }
   }

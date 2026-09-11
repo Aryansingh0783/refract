@@ -69,9 +69,23 @@
   $('#neural').addEventListener('click', () => { if (ctx && ctx.game) call(api.toggleNeural, ctx.game.id).catch(() => {}); });
   $('#hide').addEventListener('click', () => call(api.hideOverlay).catch(() => {}));
 
+  let liveHotkey = null;
   function renderKeys() {
-    $('#keysHint').innerHTML = (settings.overlay.hotkey || '').split('+').map(k => `<kbd>${k.replace(/[<>&]/g, '')}</kbd>`).join(' ') + ' hides';
+    const key = liveHotkey || (settings && settings.overlay.hotkey) || '';
+    $('#keysHint').innerHTML = key.split('+').map(k => `<kbd>${k.replace(/[<>&]/g, '')}</kbd>`).join(' ') + ' or <kbd>Esc</kbd> closes';
   }
+
+  // interactive: clickable panel (the game releases the mouse while it's open)
+  // HUD: pinned, click-through, stats only
+  function setMode(m) {
+    document.body.classList.toggle('hud-mode', !!(m && !m.interactive));
+    $('#pin').checked = !!(m && m.pinned);
+    if (m && m.hotkey) { liveHotkey = m.hotkey; renderKeys(); }
+  }
+  $('#pin').addEventListener('change', e => call(api.pinOverlay, e.target.checked).catch(() => {}));
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') call(api.closeOverlay).catch(() => {}); });
+  api.on('overlay:mode', setMode);
+  api.on('hotkeys', h => { if (h && h.overlay) { liveHotkey = h.overlay; renderKeys(); } });
 
   async function refresh() {
     try { ctx = await call(api.overlayContext); renderContext(); } catch {}
@@ -85,6 +99,8 @@
     try {
       const s = await call(api.state);
       settings = s.settings;
+      if (s.hotkeys && s.hotkeys.overlay) liveHotkey = s.hotkeys.overlay;
+      setMode({ interactive: true, pinned: !!settings.overlay.pinned });
       renderKeys(); renderTelemetry(s.telemetry); renderLook(s.currentLook);
       await refresh();
       api.ready({ ok: true });

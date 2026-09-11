@@ -23,6 +23,21 @@ const FEED_DEFAULTS = {
   mv_scale_x: '1.000', mv_scale_y: '1.000', host_window: '0', async_home: '1',
 };
 
+// Tuned RenoDX DLSS 5 neural-rendering settings (the values the one-click reference
+// installers ship). The add-on's own defaults (preset/style "Default", every strength 1.0)
+// are very subtle — part of why a working install can look "the same as vanilla".
+// Only written when the game has no [RenoDX.DLSS5] section yet, so a user's own tuning
+// is never overwritten.
+const NR_SECTION = 'RenoDX.DLSS5';
+const NR_TUNED = {
+  EnableHooks: '2', NeuralUplift: '1', NRAutoMask: '1', NRDepthMode: '0', NRDiffuseWhiteNits: '203',
+  NRGlobalTone: '0.9', NRLocalStructure: '0.44', NRLocalTone: '1.22', NRPreset: '2',
+  NRSkinStructure: '1.16', NRStyle: '1', NRUICorrection: '1',
+};
+// ReShade's own "Generic Depth" and "Effect Runtime Sync" add-ons interfere with the DLSS
+// hooks and cost frames; the reference installers disable them on fresh configs.
+const DISABLED_BUILTINS = 'Generic Depth,Effect Runtime Sync';
+
 const list = v => (v || '').split(',').map(s => s.trim()).filter(Boolean);
 const techName = t => t.split('@')[0].trim().toLowerCase();
 
@@ -47,9 +62,42 @@ function gameReShade(text) {
   return ini.stringify(doc);
 }
 
+const hasSection = (doc, name) => doc.sections.some(s => s.name.toLowerCase() === name.toLowerCase());
+
+// Never let a user's DisabledAddons list switch off the DLSS 5 add-ons we depend on.
+function scrubDisabled(doc) {
+  const cur = ini.get(doc, 'ADDON', 'DisabledAddons');
+  if (cur == null) return;
+  const kept = list(cur).filter(a => !/renodx|dlss5|dlss 5/i.test(a));
+  if (kept.join(',') !== list(cur).join(',')) ini.set(doc, 'ADDON', 'DisabledAddons', kept.join(','));
+}
+
+// ReShade.ini for the native / bridge / feeder routes.
+//   fresh config  -> sensible defaults, Home opens the overlay, tutorial skipped, tuned NR
+//   existing one  -> only adds what is missing; the user's own [RenoDX.DLSS5] is kept as-is
+function dlss5ReShade(text, { feeder = false } = {}) {
+  const fresh = !String(text || '').trim();
+  const doc = ini.parse(text || '');
+  if (!ini.get(doc, 'GENERAL', 'PresetPath')) ini.set(doc, 'GENERAL', 'PresetPath', '.\\ReShadePreset.ini');
+  if (fresh) {
+    ini.set(doc, 'GENERAL', 'NoReloadOnInit', '0');
+    ini.set(doc, 'ADDON', 'DisabledAddons', DISABLED_BUILTINS);
+    ini.set(doc, 'INPUT', 'KeyOverlay', '36,0,0,0');          // Home
+    ini.set(doc, 'OVERLAY', 'TutorialProgress', '4');         // skip ReShade's first-run tutorial
+  }
+  scrubDisabled(doc);
+  if (!hasSection(doc, NR_SECTION)) {
+    for (const [k, v] of Object.entries(NR_TUNED)) ini.set(doc, NR_SECTION, k, v);
+    if (feeder) ini.set(doc, NR_SECTION, 'NREnableUpscaling', '0');
+  } else if (feeder && ini.get(doc, NR_SECTION, 'NREnableUpscaling') == null) {
+    ini.set(doc, NR_SECTION, 'NREnableUpscaling', '0');
+  }
+  return ini.stringify(doc);
+}
+
 // Feeder route: shader search paths + the motion-vector provider definition.
 function feederReShade(text) {
-  const doc = ini.parse(text || '');
+  const doc = ini.parse(dlss5ReShade(text, { feeder: true }));
   addSearchPath(doc, 'EffectSearchPaths', '.\\reshade-shaders\\Shaders\\**');
   addSearchPath(doc, 'TextureSearchPaths', '.\\reshade-shaders\\Textures\\**');
   if (!ini.get(doc, 'GENERAL', 'PresetPath')) ini.set(doc, 'GENERAL', 'PresetPath', '.\\ReShadePreset.ini');
@@ -81,4 +129,4 @@ function feed(text) {
   return ini.stringify(doc);
 }
 
-module.exports = { gameReShade, feederReShade, feederPreset, feed, MV_PROVIDER, FEED_TECHNIQUES };
+module.exports = { gameReShade, dlss5ReShade, feederReShade, feederPreset, feed, MV_PROVIDER, FEED_TECHNIQUES, NR_TUNED, NR_SECTION };

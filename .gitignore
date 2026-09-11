@@ -21,3 +21,6 @@ Thumbs.db
 desktop.ini
 .DS_Store
 .vscode/
+
+# third-party payload assembled at build time by scripts/fetch-payload.js
+payload/

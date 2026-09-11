@@ -10,6 +10,7 @@ const fx2hlsl = require('./core/fx2hlsl');
 const { ladder } = require('./core/display');
 const reshaderuntime = require('./core/reshaderuntime');
 const feeder = require('./core/feeder');
+const nvidia = require('./core/nvidia');
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function until(fn, ms, step = 150) {
@@ -131,7 +132,8 @@ async function run(ctx) {
     const addon = P(path.join(dir, 'cache', 'renodx-dlss5-v2.5.addon64')); fs.writeFileSync(addon, 'RENODX');
     const d1 = P(path.join(dir, 'cache', 'sl', 'nvngx_dlss.dll')); fs.writeFileSync(d1, 'PAYLOAD');
     const d2 = P(path.join(dir, 'cache', 'sl', 'nvngx_dlssnr.dll')); fs.writeFileSync(d2, 'PAYLOAD-NR');
-    const payload = { ok: true, route: 'native', versions: { renodx5: 'test' }, reshadeDll, addon, addonName: 'renodx-dlss5-v2.5.addon64', dlls: [d1, d2], nvngxDlss: d1 };
+    const nr = P(path.join(dir, 'cache', 'ngx', 'nvngx_dlssnr.dll')); fs.writeFileSync(nr, 'UNIVERSAL-NR');
+    const payload = { ok: true, route: 'native', versions: { renodx5: 'test', dlssnr: 'test' }, reshadeDll, addon, addonName: 'renodx-dlss5-v2.5.addon64', dlls: [d1, d2], nvngxDlss: d1, nvngxNrUniversal: nr };
 
     const gameDir = path.join(dir, 'bin'); fs.mkdirSync(gameDir, { recursive: true });
     const exe = path.join(gameDir, 'game.exe'); fs.writeFileSync(exe, 'MZ');
@@ -145,13 +147,25 @@ async function run(ctx) {
     const ownKept = fs.readFileSync(path.join(gameDir, 'nvngx_dlss.dll'), 'utf8') === 'GAME-OWN';
     const addonKept = fs.readFileSync(path.join(gameDir, 'renodx-dlss5.addon64'), 'utf8') === 'USERS-OWN';
     const noDupe = !fs.existsSync(path.join(gameDir, 'renodx-dlss5-v2.5.addon64'));
-    const filled = !fs.existsSync(path.join(gameDir, 'nvngx_dlssnr.dll')); // all-or-nothing: never mix runtimes
+    // The neural-rendering runtime must be added (without it NR stays off — the RTX 3060 bug).
+    const filled = fs.existsSync(path.join(gameDir, 'nvngx_dlssnr.dll')) && !fs.existsSync(path.join(gameDir, 'sl.dlss_nr.dll'));
     await feeder.restore(gameDir);
     const rolledBack = fs.readFileSync(path.join(gameDir, 'dxgi.dll')).includes(Buffer.from('limited add-on functionality'));
     const leftover = fs.readdirSync(gameDir).filter(f => !['game.exe', 'nvngx_dlss.dll', 'renodx-dlss5.addon64', 'dxgi.dll'].includes(f));
     fs.rmSync(dir, { recursive: true, force: true });
     return { ok: upgraded && ownKept && addonKept && noDupe && filled && rolledBack && leftover.length === 0,
       detail: { actions: gate.actions, upgraded, ownKept, addonKept, noDupe, filled, rolledBack, leftover } };
+  });
+
+  await check('bundled payload (installer ships every dependency)', async () => {
+    const bundle = require('./core/bundle');
+    const info = bundle.info();
+    if (!info) return { ok: false, detail: 'no payload found (run npm run payload, or reinstall)' };
+    const need = ['reshade/ReShade64.dll', 'addons/renodx-dlss5.addon64', 'addons/dlss5-bridge.addon64', 'ngx/nvngx_dlssnr.dll',
+      'feeder/dlss5-feed.addon64', 'feeder/DLSS5_Feed.fx', 'feeder/headers/ReShade.fxh'];
+    const bad = need.filter(r => !bundle.file(r));
+    const lumenite = bundle.list('lumenite/Shaders/').length, streamline = bundle.list('streamline/').length;
+    return { ok: bad.length === 0 && lumenite > 0 && streamline > 0, detail: { root: info.root, files: info.files, bad, lumenite, streamline, components: info.components } };
   });
 
   await check('gpu-dlss5-tier (RTX 20/30/40 vs 50)', async () => {
@@ -210,15 +224,19 @@ async function run(ctx) {
     return { ok: true, detail: shots };
   });
 
-  await check('overlay', async () => {
+  await check('overlay (opens interactive, closes on second press)', async () => {
     ctx.toggleOverlay();
     const r = await until(() => ctx.rendererReady.overlay, 15000);
-    await sleep(1800);
-    const img = await ctx.getOverlay().webContents.capturePage();
+    const shown = await until(() => ctx.getOverlay() && ctx.getOverlay().isVisible(), 5000);
+    await sleep(1200);
+    const ow = ctx.getOverlay();
+    const img = await ow.webContents.capturePage();
     const f = path.join(out, 'screen-overlay.png');
     fs.writeFileSync(f, img.toPNG());
-    ctx.toggleOverlay();
-    return { ok: !!r, detail: { ready: r, shot: f } };
+    const clickable = ow.isFocusable();
+    if (ow.isVisible()) ctx.toggleOverlay();
+    const closed = await until(() => !ctx.getOverlay().isVisible(), 3000);
+    return { ok: !!r && !!shown && clickable && !!closed, detail: { ready: r, shown: !!shown, clickable, closed: !!closed, shot: f } };
   });
 
   await check('look-key-post (F13 to Refract window)', async () => {

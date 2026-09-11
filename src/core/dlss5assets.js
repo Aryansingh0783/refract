@@ -1,6 +1,8 @@
 'use strict';
-// Catalog of every third-party component the DLSS 5 routes need, pinned to a known version,
-// downloaded on demand, hash-verified and cached. Refract redistributes none of them.
+// Catalog of every third-party component the DLSS 5 routes need, pinned to a known version
+// and hash. The installer ships all of them in resources/payload (built by
+// scripts/fetch-payload.js from this catalog); the download path here is only the fallback
+// for a damaged install or a dev checkout without ./payload.
 //
 // Routes and what each needs:
 //   native         DX12 + the game already has DLSS  -> ReShade add-on build + renodx-dlss5
@@ -37,11 +39,11 @@ const SOURCES = {
     name: 'streamline.zip', kind: 'zip', version: 'latest',
     sha256: '5389d164ef99a0e4aba5128da2e87d26de5833aeaf89bfeb0232cfdc8f7229a2',
   },
-  // RTX 20/30/40 unlock. NVIDIA ships neural rendering enabled only on Blackwell; this is
-  // the community "Universal RTX 20/30/40/50 DLSS-NR" build — NVIDIA's nvngx_dlssnr.dll
-  // 310.8.0.0 binary-patched in place (same size and version, different hash). It is a
-  // modified proprietary binary, so Refract only fetches it when the user turns the unlock
-  // on, and equally accepts a file the user supplies themselves.
+  // The neural-rendering runtime every DLSS 5 route needs (nvngx_dlssnr.dll). This is the
+  // community "Universal RTX 20/30/40/50 DLSS-NR" build: NVIDIA's 310.8.0.0 binary patched in
+  // place (same size and version, different hash) so it also runs on Turing/Ampere/Ada.
+  // Verified live on an RTX 5070 (Cyberpunk 2077, NR evaluating every frame). It is a modified
+  // proprietary binary; users can point Refract at their own file instead.
   dlssnrPatched: {
     url: 'https://github.com/reiluisii/1-Click-DLSS5/releases/download/v3.0.2/1-Click-DLSS5-v3.0.2.zip',
     name: '1-Click-DLSS5-v3.0.2.zip', kind: 'zip', version: '3.0.2',
@@ -52,6 +54,12 @@ const SOURCES = {
 };
 
 const PINNED = require('./dlss5-hashes.json');
+const bundle = require('./bundle');
+
+// ReShade's standard shader headers. DLSS5_Feed.fx and the LumeniteFX effects #include
+// these, and neither package ships them (the reference installers pull them from here).
+const SHADER_HEADERS = ['ReShade.fxh', 'ReShadeUI.fxh', 'DrawText.fxh'];
+const HEADER_URL = n => `https://raw.githubusercontent.com/crosire/reshade-shaders/slim/Shaders/${n}`;
 const digest = buf => crypto.createHash('sha256').update(buf).digest('hex');
 
 async function fetchBytes(url, onFrac) {
@@ -132,62 +140,96 @@ async function ensureStreamline(cacheRoot, onFrac) {
   return listFiles(dir, /\.dll$/i);
 }
 
-// Assemble everything a given route needs. onProgress -> {phase, of, label, frac?}
+async function ensureShaderHeaders(cacheRoot) {
+  const dir = path.join(cacheDir(cacheRoot), 'headers');
+  await fs.promises.mkdir(dir, { recursive: true });
+  const out = [];
+  for (const n of SHADER_HEADERS) {
+    const dest = path.join(dir, n);
+    if (!fs.existsSync(dest)) {
+      const bytes = await fetchBytes(HEADER_URL(n));
+      if (!bytes.includes(Buffer.from('#'))) throw new Error('Unexpected content for ' + n);
+      await fs.promises.writeFile(dest, bytes);
+    }
+    out.push(dest);
+  }
+  return out;
+}
+
+// Assemble everything a route needs. The payload bundled in the installer is used first
+// (hash-checked by bundle.js); anything missing falls back to the pinned download.
+// onProgress -> {phase, of, label, frac?}
 async function ensurePayload(cacheRoot, { bitness = 64, route = 'native' } = {}, onProgress) {
   const rt = require('./reshaderuntime');
-  const needs = ['reshade'];
+  const needs = ['reshade', 'dlssnr'];
   if (route === 'native' || route === 'native+bridge') needs.push('renodx5');
   if (route === 'native+bridge') needs.push('bridge');
-  if (route === 'feeder') needs.push('feeder', 'lumenite', 'streamline');
+  if (route === 'feeder') needs.push('feeder', 'lumenite', 'headers', 'streamline');
   const of = needs.length;
   let n = 0;
   const step = (label, frac) => onProgress && onProgress({ phase: n, of, label, frac });
+  const b = (rel) => (bitness === 64 ? bundle.file(rel) : null);
+  const out = { ok: false, route, versions: {}, bundled: !!bundle.info() };
 
-  const out = { ok: false, route, versions: {} };
+  n++; step('ReShade add-on runtime');
+  out.reshadeDll = b('reshade/ReShade64.dll') || await rt.ensureReShade(cacheRoot, { addon: true, bitness });
 
-  n = 1; step('ReShade add-on runtime');
-  out.reshadeDll = await rt.ensureReShade(cacheRoot, { addon: true, bitness });
+  n++; step('Neural-rendering runtime');
+  out.nvngxNrUniversal = b('ngx/nvngx_dlssnr.dll') || await ensurePatchedRuntime(cacheRoot, p => step('Neural-rendering runtime', p && p.frac));
+  out.versions.dlssnr = SOURCES.dlssnrPatched.version;
 
   if (needs.includes('renodx5')) {
     n++; step('RenoDX DLSS 5 add-on');
-    const dir = await ensureUnpacked(cacheRoot, 'renodx5', f => step('RenoDX DLSS 5 add-on', f));
-    out.addon = findFile(dir, /^renodx-dlss5\.addon64$/i);
+    out.addon = b('addons/renodx-dlss5.addon64')
+      || findFile(await ensureUnpacked(cacheRoot, 'renodx5', f => step('RenoDX DLSS 5 add-on', f)), /^renodx-dlss5\.addon64$/i);
     out.addonName = 'renodx-dlss5.addon64';
     out.versions.renodx5 = SOURCES.renodx5.version;
   }
   if (needs.includes('bridge')) {
     n++; step('DX11 DLSS bridge');
-    out.bridge = await ensureUnpacked(cacheRoot, 'bridge', f => step('DX11 DLSS bridge', f));
+    out.bridge = b('addons/dlss5-bridge.addon64') || await ensureUnpacked(cacheRoot, 'bridge', f => step('DX11 DLSS bridge', f));
     out.bridgeName = 'dlss5-bridge.addon64';
     out.versions.bridge = SOURCES.bridge.version;
   }
   if (needs.includes('feeder')) {
     n++; step('DLSS 5 Feeder');
-    const dir = await ensureUnpacked(cacheRoot, 'feeder', f => step('DLSS 5 Feeder', f));
-    out.feedAddon = findFile(dir, new RegExp(`^dlss5-feed\\.addon${bitness}$`, 'i'));
-    out.feedAddonName = `dlss5-feed.addon${bitness}`;
-    out.feedFx = findFile(dir, /^DLSS5_Feed\.fx$/i);
-    out.verify = findFile(dir, /^Verify-DLSS5Feeder\.ps1$/i);
-    out.vkLayer = findFile(dir, /^VkLayer_feed_vk\.dll$/i);
-    out.vkLayerJson = findFile(dir, /^VkLayer_feed_vk\.json$/i);
+    let feedAddon = b(`feeder/dlss5-feed.addon${bitness}`), feedFx = b('feeder/DLSS5_Feed.fx'), verify = b('feeder/Verify-DLSS5Feeder.ps1');
+    if (!feedAddon || !feedFx) {
+      const dir = await ensureUnpacked(cacheRoot, 'feeder', f => step('DLSS 5 Feeder', f));
+      feedAddon = findFile(dir, new RegExp(`^dlss5-feed\\.addon${bitness}$`, 'i'));
+      feedFx = findFile(dir, /^DLSS5_Feed\.fx$/i);
+      verify = findFile(dir, /^Verify-DLSS5Feeder\.ps1$/i);
+    }
+    Object.assign(out, { feedAddon, feedFx, verify, feedAddonName: `dlss5-feed.addon${bitness}` });
     out.versions.feeder = SOURCES.feeder.version;
   }
   if (needs.includes('lumenite')) {
     n++; step('LumeniteFX shaders');
-    const dir = await ensureUnpacked(cacheRoot, 'lumenite', f => step('LumeniteFX shaders', f));
-    out.lumeniteShaders = listFiles(dir, /\.fx$/i);
-    out.lumeniteIncludes = listFiles(dir, /\.fxh$/i);
-    out.lumeniteTextures = listFiles(dir, /\.(png|jpe?g)$/i);
+    let fx = bundle.list('lumenite/Shaders/').filter(p => /\.fx$/i.test(p));
+    let fxh = bundle.list('lumenite/Shaders/include/');
+    let tex = bundle.list('lumenite/Textures/');
+    if (!fx.length) {
+      const dir = await ensureUnpacked(cacheRoot, 'lumenite', f => step('LumeniteFX shaders', f));
+      fx = listFiles(dir, /\.fx$/i); fxh = listFiles(dir, /\.fxh$/i); tex = listFiles(dir, /\.(png|jpe?g)$/i);
+    }
+    Object.assign(out, { lumeniteShaders: fx, lumeniteIncludes: fxh, lumeniteTextures: tex });
     out.versions.lumenite = SOURCES.lumenite.version;
+  }
+  if (needs.includes('headers')) {
+    n++; step('ReShade shader headers');
+    const bundled = SHADER_HEADERS.map(h => bundle.file('feeder/headers/' + h));
+    out.shaderHeaders = bundled.every(Boolean) ? bundled : await ensureShaderHeaders(cacheRoot);
   }
   out.dlls = [];
   if (needs.includes('streamline')) {
     n++; step('DLSS runtime');
-    out.dlls = await ensureStreamline(cacheRoot, f => step('DLSS runtime', f));
+    const bundled = bundle.list('streamline/');
+    out.dlls = (bundled.length ? bundled : await ensureStreamline(cacheRoot, f => step('DLSS runtime', f)))
+      .filter(p => !/^nvngx_dlssnr\.dll$/i.test(path.basename(p))); // universal NR is provisioned separately
   }
 
-  out.ok = !!out.reshadeDll && (route === 'feeder'
-    ? !!(out.feedAddon && out.feedFx && out.lumeniteShaders && out.lumeniteShaders.length && out.dlls.length)
+  out.ok = !!out.reshadeDll && !!out.nvngxNrUniversal && (route === 'feeder'
+    ? !!(out.feedAddon && out.feedFx && out.lumeniteShaders && out.lumeniteShaders.length && out.dlls.length && out.shaderHeaders)
     : !!out.addon && (route !== 'native+bridge' || !!out.bridge));
   return out;
 }
@@ -195,6 +237,8 @@ async function ensurePayload(cacheRoot, { bitness = 64, route = 'native' } = {},
 // The patched neural-rendering runtime that lets RTX 20/30/40 run DLSS 5. Only called when
 // the user has explicitly enabled the unlock. Verified twice: the archive, then the DLL.
 async function ensurePatchedRuntime(cacheRoot, onProgress) {
+  const bundled = bundle.file('ngx/nvngx_dlssnr.dll');
+  if (bundled) return bundled;
   const a = SOURCES.dlssnrPatched;
   const step = (label, frac) => onProgress && onProgress({ phase: 1, of: 1, label, frac });
   step('Patched DLSS-NR runtime (RTX 20/30/40)');
@@ -208,4 +252,6 @@ async function ensurePatchedRuntime(cacheRoot, onProgress) {
   return dll;
 }
 
-module.exports = { ensurePayload, ensureStreamline, ensureFile, ensureUnpacked, ensurePatchedRuntime, listFiles, findFile, SOURCES };
+const UNIVERSAL_NR_SHA256 = SOURCES.dlssnrPatched.innerSha256;
+
+module.exports = { ensurePayload, ensureStreamline, ensureFile, ensureUnpacked, ensurePatchedRuntime, ensureShaderHeaders, listFiles, findFile, SOURCES, SHADER_HEADERS, UNIVERSAL_NR_SHA256 };

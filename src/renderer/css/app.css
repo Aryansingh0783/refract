@@ -192,3 +192,41 @@ main{min-width:0;min-height:0;padding:0 22px 18px 18px;display:flex}
 .dlss5 .d5-prog span{font:600 11.5px var(--mono,var(--ui));color:var(--text-2);white-space:nowrap;min-width:14ch;text-align:right}
 .dlss5 .d5-row.sub{margin-top:6px;padding:10px 15px;background:color-mix(in oklab,var(--text-2) 7%,transparent);box-shadow:none}
 .dlss5 .d5-row.sub span{font-size:12px;color:var(--text-2)}
+
+/* ---------------------------------------------------------------- DLSS 5 next steps */
+.dlss5 .d5-steps{margin:10px 0 0;padding:0 0 0 20px;display:grid;gap:6px;font-size:12.3px;line-height:1.5;color:var(--text-2)}
+.dlss5 .d5-steps b{color:var(--text);font-weight:600}
+.dlss5 .d5-steps li::marker{color:var(--accent);font:600 11.5px var(--mono)}
+.dlss5 .d5-steps kbd{font-size:10.5px;padding:1px 5px}
+
+/* ---------------------------------------------------------------- restore + session */
+.actions .btn.armed{color:var(--crit);box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--crit) 55%,transparent);
+  background:color-mix(in oklab,var(--crit) 12%,transparent)}
+.session{-webkit-app-region:no-drag}
+.session-x{display:inline-grid;place-items:center;width:18px;height:18px;margin:0 -6px 0 2px;border:0;border-radius:50%;padding:0;cursor:pointer;
+  background:rgba(255,255,255,.1);color:var(--text-2);font-size:11px;transition:background .2s,color .2s}
+.session-x:hover{background:rgba(255,255,255,.22);color:var(--text)}
+
+/* ---------------------------------------------------------------- first-run guide (FX-72 scrim + GL card) */
+.sheet{position:fixed;inset:0;z-index:50;display:grid;place-items:center;padding:24px;
+  background:radial-gradient(120% 90% at 50% 40%,rgba(8,10,14,.55),rgba(4,5,8,.82));backdrop-filter:blur(6px)}
+.sheet[hidden]{display:none}
+.sheet-card{width:min(620px,100%);max-height:calc(100dvh - 48px);overflow:auto;padding:26px 28px 22px;border-radius:28px;display:grid;gap:18px}
+.sheet-head{display:flex;gap:16px;align-items:flex-start}
+.sheet-head .mark{flex:0 0 auto;width:26px;height:26px;margin-top:6px;border-radius:7px;transform:rotate(45deg);
+  background:conic-gradient(from 200deg,var(--accent),#FFD89A,var(--accent-2),var(--accent));
+  box-shadow:0 0 26px -2px color-mix(in oklab,var(--accent) 70%,transparent),inset 0 1px 1px rgba(255,255,255,.7)}
+.sheet-head h2{font:650 26px/1.15 var(--display);letter-spacing:-.025em}
+.sheet-head .lede{margin-top:4px}
+.guide{list-style:none;margin:0;padding:0;display:grid;gap:12px}
+.guide li{display:grid;grid-template-columns:30px minmax(0,1fr);gap:12px;align-items:start;padding:12px 14px;border-radius:16px;
+  background:rgba(255,255,255,.045);box-shadow:inset 0 0 0 1px rgba(255,255,255,.07)}
+.guide .n{display:grid;place-items:center;width:28px;height:28px;border-radius:50%;font:600 13px var(--mono);color:#1b1206;
+  background:linear-gradient(160deg,#FFD89A,var(--accent))}
+.guide b{font:600 14px var(--ui)}
+.guide p{margin-top:2px;font-size:12.8px;line-height:1.5;color:var(--text-2)}
+.guide p b{font-size:inherit;color:var(--text)}
+.guide kbd{font-size:10.5px;padding:1px 6px}
+.sheet-foot{display:flex;gap:8px;align-items:center}
+.sheet-foot i{color:var(--warn);font-size:16px}
+.sheet .actions{justify-content:flex-end}

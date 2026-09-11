@@ -22,6 +22,7 @@ const rt = require('./reshaderuntime');
 const assets = require('./dlss5assets');
 const cfg = require('./feederconfig');
 const { proxyName } = require('./peimports');
+const bundle = require('./bundle');
 
 const MANIFEST = 'refract-feeder.json';
 const BAK = '.refract-feeder-bak';
@@ -37,6 +38,28 @@ const DLSS_ADDON = /(dlss|ngx)/i;
 const RESHADE_PROXIES = ['dxgi.dll', 'd3d12.dll', 'd3d11.dll', 'd3d10.dll', 'd3d9.dll', 'd3d8.dll', 'ddraw.dll', 'opengl32.dll', 'dinput8.dll'];
 
 function listDir(dir) { try { return fs.readdirSync(dir); } catch { return []; } }
+
+// Hashing a 160 MB DLL on every status check would stall the UI; memo by size + mtime.
+const hashMemo = new Map();
+function hashOf(p) {
+  try {
+    const st = fs.statSync(p);
+    const k = `${p}|${st.size}|${st.mtimeMs}`;
+    if (!hashMemo.has(k)) hashMemo.set(k, bundle.sha256File(p));
+    return hashMemo.get(k);
+  } catch { return null; }
+}
+
+// Does this folder still need the neural-rendering runtime put right? (see provisionNr)
+function nrNeeded(exeDir, { gpu, unlock } = {}) {
+  const tier = (gpu && gpu.dlss5) || 'unknown';
+  if (tier === 'unsupported' || (unlock && unlock.enabled === false)) return false;
+  const dest = path.join(exeDir, 'nvngx_dlssnr.dll');
+  if (!fs.existsSync(dest)) return true;
+  if (tier !== 'patch') return false;
+  const own = unlock && unlock.source === 'own' && unlock.runtime && fs.existsSync(unlock.runtime) ? unlock.runtime : null;
+  return hashOf(dest) !== (own ? hashOf(own) : assets.UNIVERSAL_NR_SHA256);
+}
 
 function inspect(exeDir) {
   const names = listDir(exeDir);
@@ -87,8 +110,8 @@ function plan(exeDir, opts = {}) {
     return { ok: false, route: null, actions: [], warnings, inspect: i,
       reason: `${gpu.name || 'This GPU'} has no DLSS hardware. DLSS 5 needs an RTX card.` };
   }
-  if (gpu && gpu.dlss5 === 'patch' && !(unlock && unlock.enabled)) {
-    warnings.push(`RTX ${gpu.series} (${gpu.arch}): DLSS 5 neural rendering is only enabled on RTX 50 by default. Turn on the RTX 20/30/40 unlock in Settings and supply your own patched nvngx_dlssnr.dll to run it here.`);
+  if (gpu && gpu.dlss5 === 'patch' && unlock && unlock.enabled === false) {
+    warnings.push(`RTX ${gpu.series} (${gpu.arch}): the universal neural-rendering runtime is switched off, so DLSS 5 will stay off on this card. Turn it back on in the DLSS 5 panel.`);
   }
   if (bitness !== 64) return { ok: false, route: null, actions: [], warnings, inspect: i, reason: 'DLSS 5 is 64-bit only; this game is 32-bit.' };
 
@@ -104,18 +127,25 @@ function plan(exeDir, opts = {}) {
     if (!i.renodxAddons.length) actions.push('addon-install');
     if (r.route === 'native+bridge' && !i.bridgeAddons.length) actions.push('bridge-install');
   }
+  // Without nvngx_dlssnr.dll the add-on loads, hooks DLSS, and then does nothing at all.
+  if (nrNeeded(exeDir, { gpu, unlock })) actions.push('nr-runtime');
 
   if (!actions.length) {
     const tail = warnings.length ? ' ' + warnings[0] : ' If it still does nothing, turn DLSS on in the game\'s graphics settings.';
     return { ok: false, already: true, route: r.route, actions, warnings, inspect: i,
       reason: `DLSS 5 is already set up here (ReShade add-on build + ${(i.dlssAddons.join(', ') || 'add-on')}).` + tail };
   }
-  return { ok: true, route: r.route, label: ROUTE_LABEL[r.route], actions, warnings, inspect: i };
+  const repair = status(exeDir).installed;
+  return { ok: true, route: r.route, label: ROUTE_LABEL[r.route], actions, warnings, inspect: i, repair,
+    reason: actions.length === 1 && actions[0] === 'nr-runtime'
+      ? 'The neural-rendering runtime (nvngx_dlssnr.dll) is missing or the wrong build for this GPU, so DLSS 5 stays off.' : undefined };
 }
 
 function eligible(o = {}) { return plan(o.exeDir, o); }
 
 async function track(man, dest, kind) {
+  const same = e => e.path.toLowerCase() === dest.toLowerCase();
+  if (man.added.some(same) || man.replaced.some(same)) return; // already ours from an earlier run
   if (fs.existsSync(dest)) {
     const bak = dest + BAK;
     if (!fs.existsSync(bak)) await fs.promises.copyFile(dest, bak);
@@ -151,7 +181,17 @@ async function install(game, payload, { cacheRoot, onProgress, gpu = null, unloc
   }
   if (!payload.ok) throw new Error('Could not prepare the DLSS 5 components for the ' + route + ' route.');
 
-  const man = { version: 4, route, exeDir, at: Date.now(), added: [], replaced: [], notes: [] };
+  // A repair/update extends the existing manifest so one restore still undoes everything.
+  let man = null;
+  try { man = JSON.parse(fs.readFileSync(path.join(exeDir, MANIFEST), 'utf8')); } catch {}
+  if (!man) {
+    man = { version: 5, route, exeDir, added: [], replaced: [],
+      // Top-level names present before install, so restore can also remove what ReShade and
+      // the add-ons create at runtime (logs, a generated preset) when Refract installed ReShade.
+      before: listDir(exeDir) };
+  }
+  Object.assign(man, { version: 5, route, at: Date.now(), notes: [] });
+  man.added = man.added || []; man.replaced = man.replaced || [];
 
   // 1. ReShade with FULL add-on support (a limited build silently refuses to load add-ons).
   if (gate.actions.includes('reshade-install')) {
@@ -177,70 +217,61 @@ async function install(game, payload, { cacheRoot, onProgress, gpu = null, unloc
       await copyInto(man, payload.bridge, path.join(exeDir, payload.bridgeName), 'bridge');
       man.notes.push(`Added ${payload.bridgeName} (DX11 bridge ${payload.versions.bridge}).`);
     }
-    // The game's own DLSS runtime is what the add-on hooks — never touch it.
+    // The game's own DLSS/Streamline set is what the add-on hooks — never touch it.
     man.notes.push(`Left the game's own DLSS/Streamline runtime untouched (${before.dlssRuntime.length} files).`);
-    const iniPath = path.join(exeDir, 'ReShade.ini');
-    if (!fs.existsSync(iniPath)) await writeInto(man, iniPath, cfg.gameReShade(''), 'config');
-    else man.notes.push('Kept the existing ReShade.ini.');
+    await writeIni(man, exeDir, { feeder: false });
   }
 
-  await applyUnlock(man, exeDir, { gpu, unlock, cacheRoot, onProgress });
+  await provisionNr(man, exeDir, payload, { gpu, unlock, cacheRoot, onProgress });
 
   await fs.promises.writeFile(path.join(exeDir, MANIFEST), JSON.stringify(man, null, 2));
   return { ...status(exeDir), route, label: ROUTE_LABEL[route], notes: man.notes };
 }
 
-// RTX 20/30/40 (Turing/Ampere/Ada) can run DLSS 5 neural rendering with a patched
-// nvngx_dlssnr.dll. Refract never ships or downloads that file — the user points at their
-// own, the same condition the upstream unlock mods state. RTX 50 needs nothing here.
-async function applyUnlock(man, exeDir, { gpu, unlock, cacheRoot, onProgress }) {
-  if (!gpu || gpu.dlss5 !== 'patch') return;
-  if (!unlock || !unlock.enabled) {
-    man.notes.push(`RTX ${gpu.series} (${gpu.arch}): neural rendering stays off until you enable the RTX 20/30/40 unlock in Settings.`);
+// Every DLSS 5 route needs NVIDIA's neural-rendering runtime, nvngx_dlssnr.dll, next to the
+// game. Stock games don't ship it — without it the add-on logs "nvngx_dlssnr.dll was not
+// found ... NR stays off" and the game looks untouched. Refract provides the universal
+// RTX 20/30/40/50 build (verified running on RTX 50; the stock NVIDIA file only runs on
+// RTX 50). Rules:
+//   missing                         -> add the universal build (or the user's own file)
+//   present, RTX 20/30/40           -> must be the universal (or user's) build; replace, backed up
+//   present, RTX 50 / unknown GPU   -> keep whatever works there
+//   user switched the runtime off   -> leave the folder alone and say why NR stays off
+async function provisionNr(man, exeDir, payload, { gpu, unlock, cacheRoot, onProgress }) {
+  const tier = (gpu && gpu.dlss5) || 'unknown';
+  if (tier === 'unsupported') return;
+  const dest = path.join(exeDir, 'nvngx_dlssnr.dll');
+  const own = unlock && unlock.source === 'own' && unlock.runtime && fs.existsSync(unlock.runtime) ? unlock.runtime : null;
+  const optedOut = unlock && unlock.enabled === false;
+  const label = gpu && gpu.series ? `RTX ${gpu.series}${gpu.arch ? ' (' + gpu.arch + ')' : ''}` : 'this GPU';
+  if (optedOut) {
+    man.notes.push(fs.existsSync(dest) ? 'Kept the game\'s nvngx_dlssnr.dll (universal runtime switched off).'
+      : `No neural-rendering runtime installed (switched off) — DLSS 5 stays off on ${label}.`);
     return;
   }
-  let src = unlock.runtime && fs.existsSync(unlock.runtime) ? unlock.runtime : null;
-  let origin = 'your own file';
-  if (!src) {
-    if (unlock.source === 'own') {
-      throw new Error('The RTX 20/30/40 unlock is set to use your own file, but no patched nvngx_dlssnr.dll is selected. Choose one in the DLSS 5 panel.');
-    }
-    src = await assets.ensurePatchedRuntime(cacheRoot, onProgress);
-    origin = 'the community Universal RTX 20/30/40/50 build';
+  if (fs.existsSync(dest)) {
+    if (tier !== 'patch') { man.notes.push('Kept the game\'s existing nvngx_dlssnr.dll.'); return; }
+    const want = own ? bundle.sha256File(own) : assets.UNIVERSAL_NR_SHA256;
+    if (bundle.sha256File(dest) === want) { man.notes.push(`nvngx_dlssnr.dll is already the build ${label} needs.`); return; }
   }
-  await copyInto(man, src, path.join(exeDir, 'nvngx_dlssnr.dll'), 'unlock');
-  man.notes.push(`Installed a patched nvngx_dlssnr.dll (${origin}) so DLSS 5 runs on RTX ${gpu.series} (${gpu.arch}). Expect a large frame-rate cost versus RTX 50.`);
+  const src = own || payload.nvngxNrUniversal || await assets.ensurePatchedRuntime(cacheRoot, onProgress);
+  await copyInto(man, src, dest, 'runtime-nr');
+  man.notes.push(`Installed the ${own ? 'your' : 'universal'} neural-rendering runtime (nvngx_dlssnr.dll) for ${label}.`);
 }
 
-// Games with no DLSS: the feeder add-on plus the effects that generate motion vectors.
-async function installFeeder(man, exeDir, payload, before) {
-  const shaders = path.join(exeDir, 'reshade-shaders', 'Shaders');
-  const textures = path.join(exeDir, 'reshade-shaders', 'Textures');
-
-  await copyInto(man, payload.feedAddon, path.join(exeDir, payload.feedAddonName), 'addon');
-  await copyInto(man, payload.feedFx, path.join(shaders, path.basename(payload.feedFx)), 'shader');
-  for (const fx of payload.lumeniteShaders) await copyInto(man, fx, path.join(shaders, path.basename(fx)), 'shader');
-  for (const fxh of payload.lumeniteIncludes) await copyInto(man, fxh, path.join(shaders, 'include', path.basename(fxh)), 'shader');
-  for (const tex of payload.lumeniteTextures) await copyInto(man, tex, path.join(textures, path.basename(tex)), 'shader');
-  man.notes.push(`Added the DLSS 5 Feeder ${payload.versions.feeder} and LumeniteFX motion-vector shaders.`);
-
-  // This game has no DLSS of its own, so it needs NVIDIA's runtime — but still only the
-  // files it is actually missing, and never over a set the game already ships.
-  if (before.dlssRuntime.length) {
-    man.notes.push(`Left the game's existing runtime files untouched (${before.dlssRuntime.length}).`);
-  } else {
-    for (const dll of payload.dlls) await copyInto(man, dll, path.join(exeDir, path.basename(dll)), 'runtime');
-    man.notes.push(`Installed the DLSS runtime (${payload.dlls.length} files).`);
-  }
-
+// ReShade.ini: create a tuned one, or add only what is missing to the user's (backed up).
+async function writeIni(man, exeDir, { feeder }) {
   const iniPath = path.join(exeDir, 'ReShade.ini');
-  await writeInto(man, iniPath, cfg.feederReShade(await read(iniPath)), 'config');
-  const presetPath = path.join(exeDir, 'ReShadePreset.ini');
-  await writeInto(man, presetPath, cfg.feederPreset(await read(presetPath)), 'config');
-  const feedCfg = path.join(exeDir, 'dlss5-feed.cfg');
-  await writeInto(man, feedCfg, cfg.feed(await read(feedCfg)), 'config');
-  if (payload.verify) await copyInto(man, payload.verify, path.join(exeDir, path.basename(payload.verify)), 'diagnostics');
+  const cur = await read(iniPath);
+  const next = feeder ? cfg.feederReShade(cur) : cfg.dlss5ReShade(cur);
+  if (fs.existsSync(iniPath) && next === cur) { man.notes.push('Kept the existing ReShade.ini.'); return; }
+  await writeInto(man, iniPath, next, 'config');
+  man.notes.push(fs.existsSync(iniPath + BAK) ? 'Added DLSS 5 settings to your ReShade.ini (original backed up).' : 'Wrote a tuned ReShade.ini.');
 }
+
+// Files ReShade and the DLSS 5 add-ons create while the game runs. Only removed on restore
+// when Refract installed ReShade itself and the file wasn't there before.
+const RUNTIME_ARTIFACT = /^(ReShade\.log\d*|ReShadePreset\.ini|ReShade\.ini\.tmp|renodx[^\\/]*\.(log|ini|json)|dlss5[^\\/]*\.(log|cfg))$/i;
 
 async function restore(exeDir) {
   const manPath = path.join(exeDir, MANIFEST);
@@ -250,6 +281,13 @@ async function restore(exeDir) {
   for (const e of man.replaced || []) {
     const bak = e.path + BAK;
     try { if (fs.existsSync(bak)) { await fs.promises.copyFile(bak, e.path); await fs.promises.rm(bak, { force: true }); } } catch {}
+  }
+  const installedReShade = (man.added || []).some(e => e.kind === 'reshade');
+  if (installedReShade && Array.isArray(man.before)) {
+    const before = new Set(man.before.map(n => n.toLowerCase()));
+    for (const n of listDir(exeDir)) {
+      if (!before.has(n.toLowerCase()) && RUNTIME_ARTIFACT.test(n)) { try { await fs.promises.rm(path.join(exeDir, n), { force: true }); } catch {} }
+    }
   }
   await pruneEmpty(path.join(exeDir, 'reshade-shaders'));
   await fs.promises.rm(manPath, { force: true });
@@ -273,4 +311,4 @@ function status(exeDir) {
   } catch { return { installed: false }; }
 }
 
-module.exports = { install, restore, status, eligible, plan, inspect, routeFor, ROUTE_LABEL, ensurePayload: assets.ensurePayload };
+module.exports = { install, restore, status, eligible, plan, inspect, routeFor, nrNeeded, ROUTE_LABEL, MANIFEST, ensurePayload: assets.ensurePayload };

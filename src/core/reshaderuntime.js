@@ -41,6 +41,8 @@ function tar(args, cwd) {
 
 // Returns the absolute path to the extracted ReShade<bitness>.dll for the requested build.
 async function ensureReShade(cacheRoot, { addon = false, bitness = 64 } = {}) {
+  // The installer ships the 64-bit add-on build (hash-checked); prefer it over a download.
+  if (addon && bitness === 64) { const b = require('./bundle').file('reshade/ReShade64.dll'); if (b) return b; }
   if (process.platform !== 'win32') throw new Error('ReShade auto-install is Windows only.');
   const kind = addon ? 'addon' : 'plain';
   const build = BUILDS[kind];

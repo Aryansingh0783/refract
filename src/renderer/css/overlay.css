@@ -43,3 +43,16 @@ body{font:400 13px/1.45 var(--ui);color:var(--text);-webkit-font-smoothing:antia
 .wide{width:100%;min-height:42px}
 .hud-foot{margin-top:auto;display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:11px;color:var(--text-2)}
 .hud-foot kbd{font-size:10px;padding:2px 5px}
+
+/* Pin-as-HUD switch */
+.hud-foot .pin{display:inline-flex;align-items:center;gap:6px;cursor:pointer;user-select:none}
+.hud-foot .pin input{appearance:none;width:26px;height:15px;border-radius:99px;margin:0;cursor:pointer;position:relative;
+  background:rgba(255,255,255,.14);box-shadow:inset 0 0 0 1px rgba(255,255,255,.12);transition:background .25s}
+.hud-foot .pin input::after{content:"";position:absolute;top:2px;left:2px;width:11px;height:11px;border-radius:50%;background:#fff;transition:transform .25s var(--e-back,ease)}
+.hud-foot .pin input:checked{background:var(--accent)}
+.hud-foot .pin input:checked::after{transform:translateX(11px)}
+
+/* HUD mode: pinned, click-through, stats only — controls fade back so it reads as a readout */
+body.hud-mode .hud{opacity:.86}
+body.hud-mode .grp:not(.gpu),body.hud-mode #neural,body.hud-mode .hud-head .icon-btn{display:none}
+body.hud-mode .hud-foot .pin{display:none}

@@ -18,25 +18,81 @@ const BAK = '.refract-backup';
 const RESHADE_NAMES = ['dxgi.dll', 'd3d11.dll', 'd3d12.dll', 'd3d10.dll', 'd3d9.dll', 'd3d8.dll', 'ddraw.dll', 'opengl32.dll', 'ReShade64.dll', 'ReShade32.dll'];
 
 // Auto-install the ReShade runtime into a game folder if it is not already there, then
-// return the path to its ReShade.ini. This is what makes "Install looks" one click: no
-// manual ReShade setup. Existing ReShade installs are detected and left alone.
+// return the path to its ReShade.ini. This is what makes "Install looks" one click.
+// It installs the ADD-ON build: the plain build silently refuses every add-on, which would
+// switch DLSS 5 off in the same game. Whatever it adds is recorded in refract-reshade.json
+// so Restore original can take it out again.
+const RUNTIME_MANIFEST = 'refract-reshade.json';
 async function ensureRuntime(exeDir, { api = 'dxgi', bitness = 64, cacheRoot } = {}) {
   const iniPath = path.join(exeDir, 'ReShade.ini');
   const proxy = proxyName(api);
+  const man = readRuntimeManifest(exeDir) || { version: 1, added: [], before: safeList(exeDir) };
+  const note = p => { if (!man.added.some(x => x.toLowerCase() === p.toLowerCase())) man.added.push(p); };
+  let installed = false, found = null;
   for (const name of [proxy, ...RESHADE_NAMES]) {
     const f = path.join(exeDir, name);
-    if (fs.existsSync(f) && rt.isReShade(f)) {
-      if (!fs.existsSync(iniPath)) await fs.promises.writeFile(iniPath, '[GENERAL]\r\nPresetPath=.\\ReShadePreset.ini\r\n');
-      return { iniPath, installed: false, proxy: name };
-    }
+    if (fs.existsSync(f) && rt.isReShade(f)) { found = name; break; }
   }
-  if (api === 'vulkan') throw new Error('Vulkan games need a ReShade layer; that route is not automated yet.');
-  const dll = await rt.ensureReShade(cacheRoot, { addon: false, bitness });
-  const dest = path.join(exeDir, proxy);
-  await backupOnce(dest);
-  await fs.promises.copyFile(dll, dest);
-  if (!fs.existsSync(iniPath)) await fs.promises.writeFile(iniPath, '[GENERAL]\r\nPresetPath=.\\ReShadePreset.ini\r\n');
-  return { iniPath, installed: true, proxy };
+  if (!found) {
+    if (api === 'vulkan') throw new Error('Vulkan games need a ReShade layer; that route is not automated yet.');
+    const dll = await rt.ensureReShade(cacheRoot, { addon: true, bitness });
+    const dest = path.join(exeDir, proxy);
+    await fs.promises.copyFile(dll, dest);
+    note(proxy); installed = true; found = proxy;
+  }
+  if (!fs.existsSync(iniPath)) {
+    await fs.promises.writeFile(iniPath, '[GENERAL]\r\nPresetPath=.\\ReShadePreset.ini\r\n\r\n[INPUT]\r\nKeyOverlay=36,0,0,0\r\n\r\n[OVERLAY]\r\nTutorialProgress=4\r\n');
+    note('ReShade.ini');
+  }
+  if (man.added.length) await fs.promises.writeFile(path.join(exeDir, RUNTIME_MANIFEST), JSON.stringify(man, null, 2));
+  return { iniPath, installed, proxy: found };
+}
+
+function safeList(dir) { try { return fs.readdirSync(dir); } catch { return []; } }
+function readRuntimeManifest(exeDir) {
+  try { return JSON.parse(fs.readFileSync(path.join(exeDir, RUNTIME_MANIFEST), 'utf8')); } catch { return null; }
+}
+
+// Everything the looks feature changed in a game folder, fully undone:
+// the Refract technique, its shader folder, any config backups, and the ReShade runtime
+// (plus the logs/preset ReShade generated) if Refract was the one that installed it.
+async function removeAll(exeDir, reshadeIniPath) {
+  const done = [];
+  const inis = [...new Set([reshadeIniPath, path.join(exeDir, 'ReShade.ini')])].filter(p => p && fs.existsSync(p));
+  const presets = [];
+  for (const iniPath of inis) {
+    const doc = ini.parse(await read(iniPath));
+    const preset = presetPathFor(iniPath, doc);
+    presets.push(preset);
+    const pdoc = ini.parse(await read(preset));
+    const refs = splitList(ini.get(doc, 'GENERAL', 'EffectSearchPaths')).some(p => p.toLowerCase().replace(/\\+$/, '') === SEARCH.toLowerCase().replace(/\\+$/, ''))
+      || splitList(ini.get(pdoc, '', 'Techniques')).includes(TECH) || pdoc.sections.some(x => x.name === 'Refract.fx');
+    if (refs) { await uninstall(iniPath); if (!done.includes('looks')) done.push('looks'); }
+  }
+  // The surgical uninstall above reverses exactly what Refract changed. A backup copy can
+  // predate settings changed since (DLSS 5 tuning, key bindings), so it is dropped, never
+  // copied back over the live file.
+  const inExe = [path.join(exeDir, 'ReShade.ini'), path.join(exeDir, 'ReShadePreset.ini')];
+  for (const f of new Set([...inis, ...presets, ...inExe])) await fs.promises.rm(f + BAK, { force: true }).catch(() => {});
+  const shaderDir = path.join(exeDir, 'refract-shaders');
+  if (fs.existsSync(shaderDir)) { await fs.promises.rm(shaderDir, { recursive: true, force: true }); done.push('Refract shader'); }
+  const man = readRuntimeManifest(exeDir);
+  if (man) {
+    for (const rel of man.added || []) { try { await fs.promises.rm(path.join(exeDir, rel), { force: true }); } catch {} }
+    if ((man.added || []).some(r => /\.dll$/i.test(r)) && Array.isArray(man.before)) {
+      const before = new Set(man.before.map(n => n.toLowerCase()));
+      for (const n of safeList(exeDir)) {
+        if (!before.has(n.toLowerCase()) && /^(ReShade\.log\d*|ReShadePreset\.ini)$/i.test(n)) { try { await fs.promises.rm(path.join(exeDir, n), { force: true }); } catch {} }
+      }
+    }
+    await fs.promises.rm(path.join(exeDir, RUNTIME_MANIFEST), { force: true });
+    done.push('ReShade');
+  }
+  return done;
+}
+
+function touched(exeDir) {
+  return !!readRuntimeManifest(exeDir) || fs.existsSync(path.join(exeDir, 'refract-shaders'));
 }
 
 async function read(p) { try { return await fs.promises.readFile(p, 'utf8'); } catch { return null; } }
@@ -115,13 +171,15 @@ async function uninstall(reshadeIniPath) {
   ini.set(doc, 'GENERAL', 'EffectSearchPaths', paths.join(','));
   await fs.promises.writeFile(reshadeIniPath, ini.stringify(doc));
   const preset = presetPathFor(reshadeIniPath, doc);
-  const pdoc = ini.parse(await read(preset));
-  for (const key of ['Techniques', 'TechniqueSorting']) {
-    ini.set(pdoc, '', key, splitList(ini.get(pdoc, '', key)).filter(t => t !== TECH).join(','));
+  if (fs.existsSync(preset)) {
+    const pdoc = ini.parse(await read(preset));
+    for (const key of ['Techniques', 'TechniqueSorting']) {
+      ini.set(pdoc, '', key, splitList(ini.get(pdoc, '', key)).filter(t => t !== TECH).join(','));
+    }
+    pdoc.sections = pdoc.sections.filter(s => s.name !== 'Refract.fx');
+    await fs.promises.writeFile(preset, ini.stringify(pdoc));
   }
-  pdoc.sections = pdoc.sections.filter(s => s.name !== 'Refract.fx');
-  await fs.promises.writeFile(preset, ini.stringify(pdoc));
   return status(reshadeIniPath);
 }
 
-module.exports = { status, install, updateLooks, uninstall, ensureRuntime, TECH };
+module.exports = { status, install, updateLooks, uninstall, ensureRuntime, removeAll, touched, TECH, RUNTIME_MANIFEST };
