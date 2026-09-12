@@ -22,6 +22,7 @@ const rt = require('./reshaderuntime');
 const assets = require('./dlss5assets');
 const cfg = require('./feederconfig');
 const { proxyName } = require('./peimports');
+const peversion = require('./peversion');
 const bundle = require('./bundle');
 
 const MANIFEST = 'refract-feeder.json';
@@ -124,13 +125,18 @@ function verify(exeDir, { gpu = null, unlock = null, route = null } = {}) {
   else add('addon', 'RenoDX DLSS 5 add-on', i.renodxAddons.length, i.renodxAddons.join(', ') || 'renodx-dlss5.addon64 is missing.');
   if (r === 'native+bridge') add('bridge', 'DX11 → DX12 bridge add-on', i.bridgeAddons.length, i.bridgeAddons.join(', ') || 'dlss5-bridge.addon64 is missing.');
   const nr = nrState(exeDir, { gpu, unlock });
-  add('runtime', 'Neural-rendering runtime (nvngx_dlssnr.dll)', nr.ok, nr.detail);
+  // Installed by Refract, and now gone: something removed it after the install. On Windows that
+  // is nearly always real-time protection quarantining a modified NVIDIA binary.
+  const weAdded = (readManifest(exeDir).added || []).some(e => /nvngx_dlssnr\.dll$/i.test(e.path || ''));
+  const vanished = weAdded && !nr.present;
+  add('runtime', 'Neural-rendering runtime (nvngx_dlssnr.dll)', nr.ok,
+    vanished ? 'Refract installed it and it is gone. An antivirus most likely quarantined it — exclude the game folder, then repair.' : nr.detail);
   const ini = iniState(exeDir);
   add('config', 'ReShade.ini lets the add-on load', ini.ok, ini.detail);
   add('conflicts', 'Only one DLSS add-on in this folder', !i.conflicts.length,
     i.conflicts.length ? `${i.conflicts.join(', ')} fight over the same NGX hooks.` : null);
   const failed = checks.filter(c => !c.ok);
-  return { ok: !failed.length, checks, failed, route: r, nr,
+  return { ok: !failed.length, checks, failed, route: r, nr, vanished,
     summary: failed.length ? failed[0].detail || failed[0].label : 'Everything DLSS 5 needs is in place.' };
 }
 
@@ -277,7 +283,7 @@ async function writeInto(man, dest, text, kind) {
 }
 async function read(p) { try { return await fs.promises.readFile(p, 'utf8'); } catch { return ''; } }
 
-async function install(game, payload, { cacheRoot, onProgress, gpu = null, unlock = null } = {}) {
+async function install(game, payload, { cacheRoot, onProgress, gpu = null, unlock = null, upgradeSr = true } = {}) {
   const exeDir = path.dirname(game.exe);
   const api = game.api || 'dxgi';
   const bitness = game.bitness || 64;
@@ -334,6 +340,7 @@ async function install(game, payload, { cacheRoot, onProgress, gpu = null, unloc
     await writeIni(man, exeDir, { feeder: false });
   }
 
+  if (route !== 'feeder') await provisionDlssSr(man, exeDir, payload, { upgradeSr, onProgress });
   await provisionNr(man, exeDir, payload, { gpu, unlock, cacheRoot, onProgress });
 
   await fs.promises.writeFile(path.join(exeDir, MANIFEST), JSON.stringify(man, null, 2));
@@ -371,6 +378,38 @@ async function provisionNr(man, exeDir, payload, { gpu, unlock, cacheRoot, onPro
   const src = own || payload.nvngxNrUniversal || await assets.ensureUniversalRuntime(cacheRoot, onProgress);
   await copyVerified(man, src, dest, 'runtime-nr', onProgress, 'Neural-rendering runtime');
   man.notes.push(`Installed the ${own ? 'your' : 'universal'} neural-rendering runtime (nvngx_dlssnr.dll) for ${label}.`);
+}
+
+// The add-on's neural pass rides on the game's own DLSS/DLSSD work. A game shipping an older
+// DLSS Super Resolution runtime can leave that state incomplete — the RTX 4050 log reads "real
+// DLSS/DLSSD work left host state incomplete; skipping inline NR" — so the game's nvngx_dlss.dll
+// is upgraded when Refract's is newer. Rules, deliberately timid:
+//   * only nvngx_dlss.dll, never the Streamline set around it (mixing those crashes games);
+//   * only when both versions can be read and ours is strictly newer;
+//   * the original is backed up, so Restore original puts the game's own build back.
+function srDecision(ourVersion, theirFile) {
+  if (!ourVersion) return { upgrade: false, why: 'Refract has no DLSS runtime bundled.' };
+  if (!fs.existsSync(theirFile)) return { upgrade: false, why: 'The game has no nvngx_dlss.dll of its own.', missing: true };
+  let theirs = null;
+  try { const v = peversion.getFileVersion(theirFile); theirs = v && v.text; } catch {}
+  if (!theirs) return { upgrade: false, why: 'Could not read the game\'s DLSS version, so it is left alone.' };
+  const cmp = peversion.compare(ourVersion, theirs);
+  return cmp > 0
+    ? { upgrade: true, theirs, why: `The game ships DLSS ${theirs}; Refract has ${ourVersion}.` }
+    : { upgrade: false, theirs, why: `The game's DLSS ${theirs} is already current.` };
+}
+
+async function provisionDlssSr(man, exeDir, payload, { upgradeSr = true, onProgress } = {}) {
+  const src = payload && payload.nvngxDlssSr;
+  const dest = path.join(exeDir, 'nvngx_dlss.dll');
+  if (!upgradeSr) { man.notes.push('Left the game\'s DLSS runtime alone (upgrades are switched off).'); return; }
+  let ourVersion = null;
+  try { const v = src && peversion.getFileVersion(src); ourVersion = (v && v.text) || assets.SR_VERSION; } catch { ourVersion = assets.SR_VERSION; }
+  const d = srDecision(src ? ourVersion : null, dest);
+  man.dlssSr = { ...d, at: Date.now() };
+  if (!d.upgrade || !src) { if (d.why) man.notes.push(d.why); return; }
+  await copyVerified(man, src, dest, 'runtime-sr', onProgress, 'DLSS Super Resolution runtime');
+  man.notes.push(`Upgraded the game's DLSS runtime ${d.theirs} → ${ourVersion} (original backed up).`);
 }
 
 // ReShade.ini: create a tuned one, or add only what is missing to the user's (backed up).
@@ -418,6 +457,10 @@ async function pruneEmpty(dir) {
   try { if ((await fs.promises.readdir(dir)).length === 0) await fs.promises.rmdir(dir); } catch {}
 }
 
+function readManifest(exeDir) {
+  try { return JSON.parse(fs.readFileSync(path.join(exeDir, MANIFEST), 'utf8')); } catch { return {}; }
+}
+
 function status(exeDir) {
   try {
     const man = JSON.parse(fs.readFileSync(path.join(exeDir, MANIFEST), 'utf8'));
@@ -425,4 +468,4 @@ function status(exeDir) {
   } catch { return { installed: false }; }
 }
 
-module.exports = { install, restore, status, verify, quickCheck, eligible, plan, inspect, routeFor, nrNeeded, nrState, ROUTE_LABEL, MANIFEST, ensurePayload: assets.ensurePayload };
+module.exports = { install, restore, status, verify, quickCheck, srDecision, eligible, plan, inspect, routeFor, nrNeeded, nrState, ROUTE_LABEL, MANIFEST, ensurePayload: assets.ensurePayload };

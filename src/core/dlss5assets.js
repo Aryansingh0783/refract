@@ -38,6 +38,12 @@ const SOURCES = {
     url: 'https://github.com/yumlevi/renodx-dlss-installer/releases/download/latest/streamline.zip',
     name: 'streamline.zip', kind: 'zip', version: 'latest',
     sha256: '5389d164ef99a0e4aba5128da2e87d26de5833aeaf89bfeb0232cfdc8f7229a2',
+    // Two files inside are used on their own: NVIDIA's DLSS Super Resolution runtime, which the
+    // add-on's neural pass rides on, and Streamline's DLSS-NR plugin. Same bytes 1-Click ships.
+    inner: {
+      'nvngx_dlss.dll': 'c85f971ce023c9f3492fc7455f0b01a24ba18ea39636407a846902c4360b0b7e',   // 310.8.0.0
+      'sl.dlss_nr.dll': '9f6672e5e0170dc118a3188d21bda187e1fc1aa3502895b21ab846d23165c11d',   // Streamline 2.13
+    },
   },
   // The neural-rendering runtime every DLSS 5 route needs (nvngx_dlssnr.dll), taken from the
   // NeuralScreen release, which Refract also bundles whole as its screen-space engine.
@@ -160,7 +166,7 @@ async function ensureShaderHeaders(cacheRoot) {
 // onProgress -> {phase, of, label, frac?}
 async function ensurePayload(cacheRoot, { bitness = 64, route = 'native' } = {}, onProgress) {
   const rt = require('./reshaderuntime');
-  const needs = ['reshade', 'dlssnr'];
+  const needs = ['reshade', 'dlss-sr', 'dlssnr'];
   if (route === 'native' || route === 'native+bridge') needs.push('renodx5');
   if (route === 'native+bridge') needs.push('bridge');
   if (route === 'feeder') needs.push('feeder', 'lumenite', 'headers', 'streamline');
@@ -172,6 +178,11 @@ async function ensurePayload(cacheRoot, { bitness = 64, route = 'native' } = {},
 
   n++; step('ReShade add-on runtime');
   out.reshadeDll = b('reshade/ReShade64.dll') || await rt.ensureReShade(cacheRoot, { addon: true, bitness });
+
+  n++; step('DLSS Super Resolution runtime');
+  out.nvngxDlssSr = b(SR_REL);
+  out.slDlssNr = b(SL_NR_REL);
+  out.versions.dlssSr = SR_VERSION;
 
   n++; step('Neural-rendering runtime');
   out.nvngxNrUniversal = b(NR_REL) || await ensureUniversalRuntime(cacheRoot, p => step('Neural-rendering runtime', p && p.frac));
@@ -253,9 +264,34 @@ async function ensureUniversalRuntime(cacheRoot, onProgress) {
   return dll;
 }
 
+// Where the DLSS Super Resolution runtime and the Streamline NR plugin live in the payload.
+// They come from the Streamline package Refract already bundles, so there is nothing extra to
+// download — and nothing for an antivirus to object to on the way in.
+const SR_REL = 'streamline/nvngx_dlss.dll';
+const SL_NR_REL = 'streamline/sl.dlss_nr.dll';
+const SR_VERSION = '310.8.0.0';
+
+// NVIDIA's own DLSS runtimes from the 1-Click payload, hash-checked file by file.
+async function ensureDlssRuntimes(cacheRoot, onProgress) {
+  const out = { dlss: bundle.file(SR_REL), slNr: bundle.file(SL_NR_REL), version: SR_VERSION };
+  if (out.dlss && out.slNr) return out;
+  const a = SOURCES.streamline;
+  const step = (label, frac) => onProgress && onProgress({ phase: 1, of: 1, label, frac });
+  step('DLSS runtimes');
+  const dir = await ensureUnpacked(cacheRoot, 'streamline', f => step('DLSS runtimes', f));
+  for (const [name, want] of Object.entries(a.inner)) {
+    const p = walkFiles(dir).find(f => path.basename(f).toLowerCase() === name.toLowerCase());
+    if (!p) throw new Error(`The DLSS runtime package did not contain ${name}.`);
+    const got = digest(fs.readFileSync(p));
+    if (got !== want) throw new Error(`${name} checksum mismatch (expected ${want}, got ${got}).`);
+    if (name === 'nvngx_dlss.dll') out.dlss = p; else out.slNr = p;
+  }
+  return out;
+}
+
 const UNIVERSAL_NR_SHA256 = SOURCES.neuralscreen.innerSha256;
 // Refract 0.2 shipped 1-Click-DLSS5's build: sm_89/sm_120 kernels only and an architecture gate
 // that refuses Ampere ("Unsupported GPU architecture 0x170"). Fine on RTX 40/50, useless on RTX 30.
 const LEGACY_NR_SHA256 = '4b8d19bc3eff58a084f5eca7489c921501c203450169fb82ff4f649a4482ba05';
 
-module.exports = { ensurePayload, ensureStreamline, ensureFile, ensureUnpacked, ensureUniversalRuntime, ensurePatchedRuntime: ensureUniversalRuntime, ensureShaderHeaders, listFiles, findFile, walkFiles, SOURCES, SHADER_HEADERS, NR_REL, UNIVERSAL_NR_SHA256, LEGACY_NR_SHA256 };
+module.exports = { ensurePayload, ensureStreamline, ensureFile, ensureUnpacked, ensureUniversalRuntime, ensurePatchedRuntime: ensureUniversalRuntime, ensureDlssRuntimes, ensureShaderHeaders, listFiles, findFile, walkFiles, SOURCES, SHADER_HEADERS, NR_REL, SR_REL, SL_NR_REL, SR_VERSION, UNIVERSAL_NR_SHA256, LEGACY_NR_SHA256 };

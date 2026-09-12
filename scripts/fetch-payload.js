@@ -76,11 +76,18 @@ const prog = label => {
   }
   if (files[assets.NR_REL] !== assets.UNIVERSAL_NR_SHA256) throw new Error('bundled nvngx_dlssnr.dll is not the universal build');
 
-  log('Streamline / NGX runtime (feeder route)');
+  // Streamline: the feeder route's runtime set, and the source of the DLSS Super Resolution
+  // runtime (nvngx_dlss.dll 310.8) and Streamline's NR plugin used on the native routes.
+  log('Streamline / NGX runtimes ' + assets.SR_VERSION);
+  const dlssRuntimes = await assets.ensureDlssRuntimes(CACHE, prog('dlss runtimes'));
   for (const f of await assets.ensureStreamline(CACHE)) {
     if (/^nvngx_dlssnr\.dll$/i.test(path.basename(f))) continue; // the universal build (neuralscreen/native) replaces the stock one
     put(f, 'streamline/' + path.basename(f));
   }
+  for (const rel of [assets.SR_REL, assets.SL_NR_REL]) {
+    if (!files[rel]) throw new Error('the Streamline package did not provide ' + rel);
+  }
+  if (files[assets.SR_REL] !== '' && !dlssRuntimes.dlss) throw new Error('DLSS runtime check failed');
 
   const components = Object.fromEntries(Object.entries(assets.SOURCES).map(([k, v]) => [k, v.version]));
   components.reshade = '6.8.0';

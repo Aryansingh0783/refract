@@ -11,6 +11,7 @@ const bundle = require('./bundle');
 const feeder = require('./feeder');
 const reshadelog = require('./reshadelog');
 const assets = require('./dlss5assets');
+const defender = require('./defender');
 
 const MAX_LOG = 2 << 20;
 const INTERESTING = /\.(dll|addon\d*|ini|json|cfg|log)$/i;
@@ -68,7 +69,7 @@ function readTail(p, max = MAX_LOG) {
 
 // Everything about one game (or the whole app when game is null), as a zip in memory.
 function collect({ game = null, exeDir = null, gpu = null, settings = null, appVersion = null,
-  userData = null, session = null, extraFiles = [], now = new Date() } = {}) {
+  userData = null, session = null, extraFiles = [], antivirus = null, now = new Date() } = {}) {
   const redact = redactor([]);
   const entries = [];
   const report = {
@@ -79,6 +80,7 @@ function collect({ game = null, exeDir = null, gpu = null, settings = null, appV
     gpu: gpu ? { name: gpu.name, driver: gpu.driver, series: gpu.series, arch: gpu.arch, dlss5: gpu.dlss5,
       memoryTotal: gpu.memoryTotal, driverStatus: gpu.driverStatus } : null,
     payload: payloadCheck(),
+    antivirus: antivirus || null,
     session: session || null,
     game: null,
   };
@@ -159,4 +161,15 @@ function readme(report) {
   ].filter(Boolean).join('\n');
 }
 
-module.exports = { collect, folderInventory, payloadCheck, redactor };
+// The async half: ask Defender what it removed near this game, then build the bundle.
+async function collectAsync(opts = {}) {
+  let antivirus = null;
+  try {
+    const paths = [opts.exeDir, opts.userData].filter(Boolean);
+    const list = await defender.detectionsFor(paths);
+    antivirus = { detections: list, explanation: defender.explain(list) };
+  } catch {}
+  return collect({ ...opts, antivirus });
+}
+
+module.exports = { collect, collectAsync, folderInventory, payloadCheck, redactor };
