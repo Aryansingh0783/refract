@@ -1,6 +1,6 @@
 # Refract 0.5 — Multi Frame Generation on RTX 30 (and 40)
 
-Status: draft, nothing implemented yet.
+Status: **in progress.** A1–A3, B0, D1–D3, G1–G2 done and tested (23 new unit tests).
 
 **Baseline: the v0.4.0 release, plus the self-reporting feature from 0.4.1 — and nothing else.**
 That is exactly what the tree holds today: `2def46a` (0.4.0) + `126781a` (Desktop error reports on
@@ -129,21 +129,45 @@ say that rather than implying a hard setting.
 - New `src/core/mfgassets.js` mirroring `dlss5assets.js`: `ensureMfg(cacheRoot)`, exported
   constants, `MFG_DLL_REL` etc. **`dlss5assets.js` is not modified.**
 
-### B. Proxy slots — the one real hazard
+### B. Proxy slots — ANSWERED 2026-09-12
 
-A game folder may already hold ReShade's proxy (`dxgi.dll`) and OptiScaler's proxy, both placed by
-Refract 0.4.1. `dlssg_for_sm86`'s README is explicit: *"a single proxy entry point … arbitrary
-proxy chaining is not implemented"*. A third proxy DLL in the same folder is how these installs
-break.
+The plan assumed OptiScaler would host `dlssg_sm86` as an FG backend. **It cannot.** Measured, not
+guessed, by scanning the binaries:
 
-The `dlss-unlocked` layout avoids this: `dlssg_sm86.dll` sits under `OptiScaler/dlssg_sm86/` and is
-loaded **by OptiScaler as an FG backend**, not as its own proxy. Refract copies that layout.
+| Binary | `dlssg_sm86` hits | `DLSSGMod` hits |
+|---|---:|---:|
+| upstream OptiScaler 0.9.4 (what Refract bundles) | **0** | 14 |
+| `dlss-enabler-headless.dll` | 0 | 14 |
+| dlss-unlocked's own proxy `dxgi.dll` | **8** | 0 |
 
-→ **B0 is an investigation, not an assumption:** confirm from OptiScaler 0.9.4's behaviour how it
-discovers `dlssg_sm86.dll` (search path, or an ini key), and prove it in a real game before any
-UI is written. If OptiScaler 0.9.4 turns out not to load it, the fallback is to give dlssg_sm86 a
-proxy slot from the same allocator Refract already uses, and to refuse the combination when no
-free slot remains — never to silently place a second `dxgi.dll`.
+That last one reports `FileDescription: OptiScaler`, `ProductVersion 0.7.7-final (e237f895)` —
+it is a **fork** of OptiScaler carrying dlss-unlocked's own version stamp, not upstream. Upstream
+OptiScaler has no knowledge of dlssg_sm86; its DLSSG support is `DLSSGMod`, the Nukem FSR3 path.
+
+So hosting MFG "inside OptiScaler" would mean shipping a *second, older, forked* OptiScaler
+alongside the 0.9.4 the DLSS 5 bridge route depends on. That is a bad trade.
+
+**It is not needed.** Reading the PE export table of `dlssg_sm86.dll`:
+
+- internal name **`version.dll`**, exporting the full `GetFileVersionInfoA/W/Ex/Size/ByHandle` set
+  — it *is* the standalone proxy build, merely renamed inside dlss-unlocked's tree
+- it also exports the NGX provider API (`NVSDK_NGX_D3D12_*`, `NVSDK_NGX_D3D11_*`,
+  `NVSDK_NGX_CUDA_*`), which is how it serves DLSS-G to the game
+
+This matches dlssg_for_sm86's own documented use: *"Place `version.dll` and `dlssg_sm86.ini`
+beside the game's rendering executable."* No OptiScaler involvement at all.
+
+**Decision.** Refract installs `dlssg_sm86.dll` **as its own proxy DLL**, taking one slot from the
+existing allocator, and leaves upstream OptiScaler 0.9.4 exactly as it is. Consequences:
+
+1. The slot allocator must now serve three consumers — ReShade, OptiScaler, dlssg_sm86 — and
+   `version.dll` is already in its candidate list, so reservation has to be explicit.
+2. MFG works with or without the OptiScaler bridge route; they are independent.
+3. If no free slot remains, MFG is refused with a readable reason. Never a second file in a slot
+   another tool owns.
+4. The user asked for "MFG using OptiScaler". The honest answer is that upstream OptiScaler does
+   not do Ampere MFG, and the engine that does needs no host. If the exact dlss-unlocked stack is
+   wanted later, bundling their fork stays possible — but not by default.
 
 ### C. Install route
 
@@ -185,17 +209,18 @@ Per game, from one `mfg` object `{ enabled, multiplier, reflex, cap, fallback }`
 ## 5. Checklist
 
 ### A. Source and bundle
-- [ ] A1 Pin the `dlss-unlocked` release + zip sha256 in a new `SOURCES.dlssUnlocked`
-- [ ] A2 `fetch-payload.js` extracts the six MFG files to `payload/mfg/`, asserting each sha256
-- [ ] A3 `src/core/mfgassets.js` with `ensureMfg()` + constants; `dlss5assets.js` untouched
+- [x] A1 Pinned in `src/core/mfgassets.js` (`SOURCE`, sha256 `973176777b87e84c…`)
+- [x] A2 `fetch-payload.js` extracts the six files to `payload/mfg/`; **built: 1378 files, 620.6 MB** (was 1372 / 595) and all five DLL hashes matched
+- [x] A3 `mfgassets.js` with `ensureMfg()`/`extractFrom()`; `dlss5assets.js` untouched
 - [ ] A4 Lite build carries all of it (none of these are NVIDIA-unreleased binaries)
 - [ ] A5 Licences/THIRD_PARTY_NOTICES copied into the payload and credited in the README
 
 ### B. Loading (do first — everything else depends on the answer)
-- [ ] B0 **Establish how OptiScaler 0.9.4 discovers `dlssg_sm86.dll`.** Prove it in a real DX12
-      game on the 5070 with `Router=SM86`/`SimulateAmpere` forced, reading OptiScaler's log
-- [ ] B1 If it does not load: extend the proxy-slot allocator to a third slot, and refuse the
-      combination (with a clear reason) when no free slot remains
+- [x] B0 **Answered: it does not.** Upstream 0.9.4 has zero `dlssg_sm86` references; the loader
+      in dlss-unlocked is a *fork*. `dlssg_sm86.dll` is itself a `version.dll` proxy, so it needs
+      no host — see section B
+- [ ] B1 Extend the proxy-slot allocator to a third consumer; refuse with a clear reason when no
+      free slot remains **(now required, not contingent)**
 - [ ] B2 Never write a second file into a slot another tool owns — regression test
 
 ### C. Install / restore
@@ -204,9 +229,9 @@ Per game, from one `mfg` object `{ enabled, multiplier, reflex, cap, fallback }`
 - [ ] C3 Round-trip test: install with MFG → restore → folder byte-identical to before
 
 ### D. Configuration
-- [ ] D1 `dlssg_sm86.ini` writer: Router / KernelImage / HardwareBilinear / MaxGeneratedFrames
-- [ ] D2 `nvngx.ini` writer: Generator / Reflex / FramerateLimit / FrameGenerationMode
-- [ ] D3 Cap calculator from the detected refresh rate and multiplier, unit-tested
+- [x] D1 `mfgconfig.engineIni()`: Router / KernelImage / HardwareBilinear / MaxGeneratedFrames
+- [x] D2 `mfgconfig.routerIni()`: Generator / Reflex / FramerateLimit / FrameGenerationMode
+- [x] D3 `mfgconfig.frameCap()` + `plan()`, unit-tested (165 Hz @ 3X → 162 cap, ~54 real fps)
 - [ ] D4 Writers preserve any keys the user changed by hand (same rule as `feederconfig.js`)
 
 ### E. Ghosting
@@ -223,8 +248,9 @@ Per game, from one `mfg` object `{ enabled, multiplier, reflex, cap, fallback }`
 - [ ] F4 UI states the honest cost: FG adds latency; sm86 has no Reflex Warp
 
 ### G. Gating
-- [ ] G1 RTX 30/40 + DX12 + 64-bit only; RTX 50 never sees it; RTX 20 experimental behind a switch
-- [ ] G2 Refuse with a readable reason on DX11, Vulkan, x86
+- [x] G1 `src/core/mfg.js` `eligible()`: RTX 30/40 + DX12 + x64; RTX 50 refused; RTX 20 behind
+      an experimental switch
+- [x] G2 Readable refusal reasons for DX11 / Vulkan / x86 / non-Windows
 
 ### H. Verification, tests, ship
 - [ ] H1 `verify()` MFG checks (files, hashes, inis, single proxy owner)

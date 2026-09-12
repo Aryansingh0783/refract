@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const assets = require('../src/core/dlss5assets');
+const mfgassets = require('../src/core/mfgassets');
 const rt = require('../src/core/reshaderuntime');
 const { sha256File } = require('../src/core/bundle');
 
@@ -106,6 +107,18 @@ const prog = label => {
     if (!files[rel]) throw new Error('the Streamline package did not provide ' + rel);
   }
   if (files[assets.SR_REL] !== '' && !dlssRuntimes.dlss) throw new Error('DLSS runtime check failed');
+
+  // Multi Frame Generation for RTX 30/40: the dlssg_sm86 engine plus the Reflex pieces that are
+  // the only real latency lever. Sourced from the pinned dlss-unlocked release because
+  // dlssg_for_sm86 itself publishes no binaries. Each file is hash-checked on extraction.
+  log('Multi Frame Generation (dlssg_sm86 + Reflex, RTX 30/40)');
+  if (!assets.SOURCES[mfgassets.SOURCE.key]) assets.SOURCES[mfgassets.SOURCE.key] = mfgassets.SOURCE;
+  const mfgDir = await assets.ensureUnpacked(CACHE, mfgassets.SOURCE.key, prog('mfg'));
+  const mfgFiles = await mfgassets.extractFrom(mfgDir);
+  for (const [rel, src] of Object.entries(mfgFiles)) put(src, rel);
+  for (const f of mfgassets.FILES) {
+    if (!f.optional && !files[f.rel]) throw new Error('the MFG payload is missing ' + f.rel);
+  }
 
   const components = Object.fromEntries(Object.entries(assets.SOURCES).map(([k, v]) => [k, v.version]));
   components.reshade = '6.8.0';
