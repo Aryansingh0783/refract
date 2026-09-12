@@ -157,20 +157,29 @@ async function run(ctx) {
       detail: { actions: gate.actions, upgraded, ownKept, addonKept, noDupe, filled, rolledBack, leftover } };
   });
 
-  await check('bundled payload (installer ships every dependency)', async () => {
+  await check('bundled payload (full build ships everything; lite fetches the runtime)', async () => {
     const bundle = require('./core/bundle');
     const info = bundle.info();
     if (!info) return { ok: false, detail: 'no payload found (run npm run payload, or reinstall)' };
     const assets = require('./core/dlss5assets');
-    const need = ['reshade/ReShade64.dll', 'addons/renodx-dlss5.addon64', 'addons/dlss5-bridge.addon64', assets.NR_REL, assets.SR_REL, assets.SL_NR_REL,
+    // The public build leaves NVIDIA's nvngx_dlssnr.dll out of the installer (it is not ours to
+    // redistribute) and downloads it, hash-checked, on first use. Everything else must be here.
+    const lite = !!(info.components && info.components.lite);
+    const need = ['reshade/ReShade64.dll', 'addons/renodx-dlss5.addon64', 'addons/dlss5-bridge.addon64', assets.SR_REL, assets.SL_NR_REL,
       'feeder/dlss5-feed.addon64', 'feeder/DLSS5_Feed.fx', 'feeder/headers/ReShade.fxh',
       'neuralscreen/main.py', 'neuralscreen/runtime/pythonw.exe', 'neuralscreen/native/nvngx.dll',
       assets.OPTI_DLL_REL, assets.OPTI_XESS_REL];
+    if (!lite) need.push(assets.NR_REL);
     const bad = need.filter(r => !bundle.file(r));
     const nr = bundle.file(assets.NR_REL);
-    const nrOk = !!nr && bundle.sha256File(nr) === assets.UNIVERSAL_NR_SHA256;
+    // Lite: the runtime must be absent (a stray copy would mean the build leaked it) and the
+    // download it will use must be a known source. Full: it must be the universal build.
+    const nrOk = lite
+      ? !nr && !!assets.SOURCES.neuralscreen.url
+      : !!nr && bundle.sha256File(nr) === assets.UNIVERSAL_NR_SHA256;
     const lumenite = bundle.list('lumenite/Shaders/').length, streamline = bundle.list('streamline/').length;
-    return { ok: bad.length === 0 && nrOk && lumenite > 0 && streamline > 0, detail: { root: info.root, files: info.files, bad, nrUniversal: nrOk, lumenite, streamline, components: info.components } };
+    return { ok: bad.length === 0 && nrOk && lumenite > 0 && streamline > 0,
+      detail: { root: info.root, files: info.files, bad, lite, nrUniversal: !lite && nrOk, nrOnFirstUse: lite, lumenite, streamline, components: info.components } };
   });
 
   await check('install verification + log verdicts (the RTX 3060 failure is caught)', async () => {

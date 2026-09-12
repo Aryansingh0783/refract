@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { EventEmitter } = require('events');
+const t_restore = [];
 const { NeuralScreen, KEY_FILES } = require('../src/core/neuralscreen');
 
 function fixture() {
@@ -97,9 +98,45 @@ test('availability: RTX 20 and GTX are refused; a damaged copy fails loudly', as
   assert.strictEqual(ns.available({ dlss5: 'native', series: 50 }).ok, true);
   assert.match(ns.available({ dlss5: 'unsupported', series: 20 }).reason, /Turing/);
   assert.match(ns.available({ dlss5: 'unsupported', series: null }).reason, /RTX 30, 40 or 50/);
-  // A source that lost a key file is reported, not silently started.
-  fs.rmSync(path.join(f.src, 'native', 'nvngx_dlssnr.dll'));
+  // A source that lost an engine file is reported, not silently started.
+  fs.rmSync(path.join(f.src, 'native', 'nvngx.dll'));
   const broken = new NeuralScreen({ home: path.join(f.base, 'home2'), source: f.src });
   await assert.rejects(() => broken.prepare(), /damaged/i);
   assert.ok(!fs.existsSync(path.join(f.base, 'home2', 'main.py')), 'nothing is copied from a damaged source');
+});
+
+// The public (lite) build ships the engine without NVIDIA's runtime and fetches it on first use.
+// An empty manifest stands in for a lite payload so the machine's real one is never consulted
+// (on a dev box payload/ exists and would satisfy the lookup, hiding the case under test).
+test('a source without the runtime is the lite build, not a damaged one', async () => {
+  const f = fixture();
+  const bundle = require('../src/core/bundle');
+  const emptyPayload = path.join(f.base, 'lite-payload');
+  fs.mkdirSync(emptyPayload, { recursive: true });
+  fs.writeFileSync(path.join(emptyPayload, 'manifest.json'), JSON.stringify({ version: 1, components: { lite: true }, files: {} }));
+  const prevPayload = process.env.REFRACT_PAYLOAD;
+  process.env.REFRACT_PAYLOAD = emptyPayload;
+  bundle._reset();
+  t_restore.push(() => { if (prevPayload === undefined) delete process.env.REFRACT_PAYLOAD; else process.env.REFRACT_PAYLOAD = prevPayload; bundle._reset(); });
+  fs.rmSync(path.join(f.src, 'native', 'nvngx_dlssnr.dll'));
+  // Engine files are all there, so the engine is available and the copy still happens...
+  const lite = new NeuralScreen({ home: path.join(f.base, 'home3'), source: f.src });
+  assert.strictEqual(lite.available({ dlss5: 'patch', series: 30 }).ok, true);
+  // ...but with nowhere to download from, it says exactly what is missing.
+  await assert.rejects(() => lite.prepare(), /neural-rendering runtime/i);
+  assert.ok(fs.existsSync(path.join(f.base, 'home3', 'main.py')), 'the engine itself is still mirrored');
+
+  // Given a place to fetch to, the runtime is linked into the working copy.
+  const fetched = path.join(f.base, 'downloaded-nvngx_dlssnr.dll');
+  fs.writeFileSync(fetched, 'UNIVERSAL-RUNTIME');
+  const ok = new NeuralScreen({ home: path.join(f.base, 'home4'), source: f.src, cacheRoot: f.base });
+  ok.ensureRuntime = async function () {
+    const to = path.join(this.home, 'native', 'nvngx_dlssnr.dll');
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.copyFileSync(fetched, to);
+    return to;
+  };
+  await ok.prepare();
+  assert.equal(fs.readFileSync(path.join(f.base, 'home4', 'native', 'nvngx_dlssnr.dll'), 'utf8'), 'UNIVERSAL-RUNTIME');
+  while (t_restore.length) t_restore.pop()();
 });

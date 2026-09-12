@@ -18,6 +18,10 @@ const OUT = path.join(ROOT, 'payload');
 const CACHE = process.env.REFRACT_BUILD_CACHE || path.join(process.env.APPDATA || ROOT, 'Refract');
 
 const files = {};
+// REFRACT_LITE=1 builds the redistributable payload: everything except NVIDIA's
+// nvngx_dlssnr.dll, which Refract downloads from NeuralScreen's release on first use.
+const LITE = process.env.REFRACT_LITE === '1' || process.argv.includes('--lite');
+
 function put(src, rel) {
   if (!src || !fs.existsSync(src)) throw new Error('missing source for ' + rel);
   const dest = path.join(OUT, ...rel.split('/'));
@@ -77,9 +81,18 @@ const prog = label => {
   for (const f of assets.walkFiles(ns)) {
     const rel = path.relative(ns, f).split(path.sep).join('/');
     if (/^(\.extracted|NeuralScreen\.log|recordings\/|screenshots\/)/i.test(rel)) continue;
+    // The public build leaves NVIDIA's neural-rendering runtime out of the installer: it is
+    // not NVIDIA's to redistribute. The app fetches and hash-checks it from NeuralScreen's own
+    // release on first use, so the only difference a user sees is one download.
+    if (LITE && 'neuralscreen/' + rel === assets.NR_REL) continue;
     put(f, 'neuralscreen/' + rel);
   }
-  if (files[assets.NR_REL] !== assets.UNIVERSAL_NR_SHA256) throw new Error('bundled nvngx_dlssnr.dll is not the universal build');
+  if (LITE) {
+    if (files[assets.NR_REL]) throw new Error('lite payload still contains ' + assets.NR_REL);
+    log('lite build: ' + assets.NR_REL + ' left out; Refract downloads it on first use');
+  } else if (files[assets.NR_REL] !== assets.UNIVERSAL_NR_SHA256) {
+    throw new Error('bundled nvngx_dlssnr.dll is not the universal build');
+  }
 
   // Streamline: the feeder route's runtime set, and the source of the DLSS Super Resolution
   // runtime (nvngx_dlss.dll 310.8) and Streamline's NR plugin used on the native routes.
@@ -96,6 +109,7 @@ const prog = label => {
 
   const components = Object.fromEntries(Object.entries(assets.SOURCES).map(([k, v]) => [k, v.version]));
   components.reshade = '6.8.0';
+  components.lite = LITE;
   fs.writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify({ version: 1, generatedAt: new Date().toISOString(), components, files }, null, 2));
   const bytes = Object.keys(files).reduce((s, r) => s + fs.statSync(path.join(OUT, ...r.split('/'))).size, 0);
   log(`payload ready: ${Object.keys(files).length} files, ${(bytes / 1048576).toFixed(1)} MB -> ${OUT}`);
