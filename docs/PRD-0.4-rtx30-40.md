@@ -309,7 +309,8 @@ from Refract never installing it. **This is now a leading candidate for the RTX 
 - [x] D3 DIRECT route: version-compare and upgrade the game's `nvngx_dlss.dll` (recursive, depth 4),
       → Verified end to end on a folder holding a real DLSS 310.6: upgraded to 310.8, original backed up, restore byte-identical.
       backing up the original, manifest-tracked **(T)**
-- [ ] D4 Stale `sl.dlss_nr.dll` handling per the A/B result **(V)** **(T)**
+- [x] D4 Stale `sl.dlss_nr.dll` handling per the A/B result **(V)** **(T)**
+      → The bridge route installs the runtime under both names 1-Click uses; on the native routes a stale sl.dlss_nr.dll is left alone until the A/B says otherwise.
 - [x] D5 Never touch other `sl.*.dll` files; regression test that asserts it **(T)**
 - [x] D6 "DLSS runtimes" panel per game: what's there, what Refract can install, one-click upgrade
       → Partly: the DLSS 5 panel shows the game's runtime version and offers the upgrade. A full runtimes panel is still open.
@@ -322,7 +323,8 @@ from Refract never installing it. **This is now a leading candidate for the RTX 
 
 ## F. R5 — configuration and the overlay artifacting
 
-- [ ] F1 Per-game `EnableHooks` setting (1 or 2) with plain-language UI; default per route **(V)**
+- [x] F1 Per-game `EnableHooks` setting (1 or 2) with plain-language UI; default per route **(V)**
+      → Per-game hook mode with a per-card default: RTX 50 keeps mode 2 (verified), RTX 30/40 get mode 1 — the mode 1-Click ships, which also patches the game's Streamline modules. Still needs an A/B on real 30/40 hardware.
 - [ ] F2 Add `AddonPath`, `SkipLoadingDisabledEffects`, `ForceShortcutModifiers`,
       `[renodx] SettingsMode=0` to the written ini **(T)**
 - [ ] F3 A/B `NRUICorrection` and the add-on's UI-correction control on the 5070; ship the fix or
@@ -332,14 +334,27 @@ from Refract never installing it. **This is now a leading candidate for the RTX 
 
 ## G. R2 — OptiScaler bridge (Mode 2)
 
-- [ ] G1 Upscaler classification (`native-dlss` / `fsr2` / `xess` / `none`) with 1-Click's
+- [x] G1 Upscaler classification (`native-dlss` / `fsr2` / `xess` / `none`) with 1-Click's
       signatures, layered on the existing API detection **(T)**
-- [ ] G2 Bundle OptiScaler 0.9.4 + `libxess.dll` + the tuned ini, pinned and hash-checked
-- [ ] G3 Bridge install: proxy choice (`dxgi.dll`, `winmm.dll` on Vulkan), ini, `libxess.dll`,
+- [x] G2 Bundle OptiScaler 0.9.4 + `libxess.dll` + the tuned ini, pinned and hash-checked
+- [x] G3 Bridge install: proxy choice (`dxgi.dll`, `winmm.dll` on Vulkan), ini, `libxess.dll`,
       NR runtime under both names; refuse when a ReShade proxy already occupies the slot **(T)**
-- [ ] G4 Manifest + exact restore for the bridge route **(T)**
-- [ ] G5 Route override in the UI (Auto / Direct / Bridge / Feeder / Neural Screen)
+- [x] G4 Manifest + exact restore for the bridge route **(T)**
+- [x] G5 Route override in the UI (Auto / Direct / Bridge / Feeder / Neural Screen)
 - [ ] G6 Verify on one FSR2-only game per card **(V)**
+
+## G′. Found while porting mode 3
+
+`installFeeder()` was **called but never defined** — every install on the feeder route (a game
+with no upscaler at all) threw `ReferenceError` in 0.1 through 0.4-alpha. No test covered it and
+none of the test machine's games take that route. Now implemented and covered:
+
+- [x] G′1 Feeder install: feed add-on + RenoDX add-on, LumeniteFX shaders and textures, ReShade
+      headers only where missing, the runtime files the game lacks (never overwriting its own
+      Streamline set), `dlss5-feed.cfg`, the feeder ini and preset
+- [x] G′2 Conflict detection understands the intended pairings (feed + RenoDX, RenoDX + DX11
+      bridge) and flags only duplicates and strangers
+- [x] G′3 Round-trip test: install on the feeder route, verify, restore to the original folder
 
 ## H. Ship
 

@@ -112,10 +112,19 @@ test('competing DLSS add-ons in one folder are flagged as a conflict', () => {
   }
   fs.writeFileSync(path.join(dir, 'nvngx_dlssnr.dll'), 'NR');
   const gate = feeder.plan(dir, { bitness: 64 });
-  assert.strictEqual(gate.inspect.conflicts.length, 4, 'all four DLSS add-ons detected');
+  // The two RenoDX builds are the real fight; feed and the DX11 bridge are legitimate company.
+  assert.deepStrictEqual(gate.inspect.conflicts.sort(), ['renodx-dlss.addon64', 'renodx-dlss5.addon64']);
   assert.ok(gate.warnings.length, 'a conflict warning is raised');
   assert.match(gate.warnings[0], /fight over the same NGX hooks/i);
-  assert.match(gate.reason, /4 DLSS add-ons are installed/i);
+  assert.match(gate.reason, /2 DLSS add-ons are installed/i);
+  // A stranger add-on that also drives DLSS counts too.
+  fs.writeFileSync(path.join(dir, 'someones-dlss-thing.addon64'), 'X');
+  assert.ok(feeder.plan(dir, { bitness: 64 }).inspect.conflicts.includes('someones-dlss-thing.addon64'));
+  // The intended feeder pairing on its own is not a conflict.
+  const solo = path.join(base, 'solo'); gameWithDlss(solo);
+  fs.writeFileSync(path.join(solo, 'dxgi.dll'), RESHADE_ADDON_BYTES);
+  for (const a of ['renodx-dlss5.addon64', 'dlss5-feed.addon64']) fs.writeFileSync(path.join(solo, a), 'X');
+  assert.deepStrictEqual(feeder.plan(solo, { bitness: 64 }).inspect.conflicts, []);
   fs.rmSync(base, { recursive: true, force: true });
 });
 
@@ -550,5 +559,128 @@ test('a runtime Refract installed that has since vanished is called out as an an
   assert.strictEqual(v.ok, false);
   assert.strictEqual(v.vanished, true);
   assert.match(v.checks.find(c => c.id === 'runtime').detail, /antivirus most likely quarantined/);
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------- the OptiScaler bridge (mode 2)
+function fsrGame(dir, { xess = false, reshade = false } = {}) {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'game.exe'), 'MZ');
+  if (xess) fs.writeFileSync(path.join(dir, 'libxess.dll'), 'GAME-XESS');
+  else fs.writeFileSync(path.join(dir, 'ffx_fsr2_x64.dll'), 'GAME-FSR2');
+  if (reshade) fs.writeFileSync(path.join(dir, 'dxgi.dll'), 'ReShade 6.8.0 Searching for add-ons');
+  return path.join(dir, 'game.exe');
+}
+function optiPayload(dir) {
+  const P = p => { fs.mkdirSync(path.dirname(p), { recursive: true }); return p; };
+  const dll = P(path.join(dir, 'opti', 'OptiScaler.dll')); fs.writeFileSync(dll, 'OPTISCALER');
+  const xess = P(path.join(dir, 'opti', 'libxess.dll')); fs.writeFileSync(xess, 'XESS-RUNTIME');
+  const nr = P(path.join(dir, 'ngx', 'nvngx_dlssnr.dll')); fs.writeFileSync(nr, 'UNIVERSAL-NR');
+  return { ok: true, route: 'optiscaler', versions: { optiscaler: '0.9.4' }, optiScaler: dll, optiXess: xess, nvngxNrUniversal: nr };
+}
+
+test('a game with FSR or XeSS and no DLSS is routed through the bridge', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-opti-'));
+  const opts = { bitness: 64, api: 'dxgi', dx: 12, gpu: BLACKWELL };
+  const fsr = path.join(base, 'fsr'); fsrGame(fsr);
+  const p = feeder.plan(fsr, opts);
+  assert.strictEqual(p.route, 'optiscaler');
+  assert.deepStrictEqual(p.actions, ['optiscaler-install', 'nr-runtime']);
+  assert.match(p.label, /FSR\/XeSS/);
+  const xe = path.join(base, 'xess'); fsrGame(xe, { xess: true });
+  assert.strictEqual(feeder.plan(xe, opts).route, 'optiscaler');
+  // a game with real DLSS still takes the native route, FSR files or not
+  const both = path.join(base, 'both'); gameWithDlss(both); fs.writeFileSync(path.join(both, 'ffx_fsr2_x64.dll'), 'x');
+  assert.strictEqual(feeder.plan(both, opts).route, 'native');
+  // and a game with neither still goes to the feeder
+  const bare = path.join(base, 'bare'); fs.mkdirSync(bare); fs.writeFileSync(path.join(bare, 'game.exe'), 'MZ');
+  assert.strictEqual(feeder.plan(bare, opts).route, 'feeder');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('the bridge installs beside ReShade, verifies, and restores exactly', async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-opti2-'));
+  const payload = optiPayload(path.join(base, 'p'));
+  const dir = path.join(base, 'g');
+  const exe = fsrGame(dir, { reshade: true });      // ReShade already owns dxgi.dll
+  const before = fs.readdirSync(dir).sort();
+  const r = await feeder.install({ exe, api: 'dxgi', dx: 12, bitness: 64 }, payload,
+    { cacheRoot: path.join(base, 'c'), gpu: BLACKWELL, unlock: { enabled: true, source: 'own', runtime: payload.nvngxNrUniversal } });
+  assert.strictEqual(r.route, 'optiscaler');
+  assert.strictEqual(r.ok, true, JSON.stringify(r.verify.failed));
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'dxgi.dll'), 'utf8'), 'ReShade 6.8.0 Searching for add-ons', 'ReShade is left alone');
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'winmm.dll'), 'utf8'), 'OPTISCALER', 'the bridge takes the next free proxy name');
+  assert.match(fs.readFileSync(path.join(dir, 'OptiScaler.ini'), 'utf8'), /Dx12Upscaler=dlss/);
+  assert.ok(fs.existsSync(path.join(dir, 'nvngx_dlssnr.dll')) && fs.existsSync(path.join(dir, 'nvngx.dll_dlssnr.dll')), 'the runtime is there under both names');
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'libxess.dll'), 'utf8'), 'XESS-RUNTIME', 'the game\'s XeSS stub is replaced by the bridge runtime');
+  await feeder.restore(dir);
+  assert.deepStrictEqual(fs.readdirSync(dir).sort(), before, 'restore leaves the folder as it was');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------- the feeder route (mode 3)
+function feederPayload(dir) {
+  const P = p => { fs.mkdirSync(path.dirname(p), { recursive: true }); return p; };
+  const w = (p, t) => { fs.writeFileSync(P(p), t); return p; };
+  return {
+    ok: true, route: 'feeder', versions: { feeder: '0.15.1', lumenite: 'mainline', renodx5: '4.70', dlssnr: 'test' },
+    reshadeDll: w(path.join(dir, 'reshade', 'ReShade64.dll'), 'ReShade 6.8.0 Searching for add-ons'),
+    feedAddon: w(path.join(dir, 'feeder', 'dlss5-feed.addon64'), 'FEED'),
+    feedAddonName: 'dlss5-feed.addon64',
+    feedFx: w(path.join(dir, 'feeder', 'DLSS5_Feed.fx'), '// feed'),
+    addon: w(path.join(dir, 'addons', 'renodx-dlss5.addon64'), 'RENODX'),
+    addonName: 'renodx-dlss5.addon64',
+    lumeniteShaders: [w(path.join(dir, 'lum', 'lumenite_Kernel.fx'), '// kernel')],
+    lumeniteIncludes: [w(path.join(dir, 'lum', 'inc', 'lumenite_Helpers.fxh'), '// helpers')],
+    lumeniteTextures: [w(path.join(dir, 'lum', 'tex', 'lumenite_bluenoise256.png'), 'PNG')],
+    shaderHeaders: [w(path.join(dir, 'hdr', 'ReShade.fxh'), '// reshade header')],
+    dlls: [w(path.join(dir, 'sl', 'sl.dlss.dll'), 'SL-DLSS'), w(path.join(dir, 'sl', 'sl.common.dll'), 'SL-COMMON')],
+    nvngxDlssSr: w(path.join(dir, 'ngx', 'nvngx_dlss.dll'), 'SR-310.8'),
+    nvngxNrUniversal: w(path.join(dir, 'ngx', 'nvngx_dlssnr.dll'), 'UNIVERSAL-NR'),
+  };
+}
+
+test('the feeder route installs, verifies and restores (it used to throw)', async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-feed-'));
+  const payload = feederPayload(path.join(base, 'p'));
+  const dir = path.join(base, 'g');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'game.exe'), 'MZ');
+  fs.writeFileSync(path.join(dir, 'sl.common.dll'), 'GAME-OWN-SL-COMMON'); // the game already has one
+  const before = fs.readdirSync(dir).sort();
+  const unlock = { enabled: true, source: 'own', runtime: payload.nvngxNrUniversal };
+  const r = await feeder.install({ exe: path.join(dir, 'game.exe'), api: 'dxgi', dx: 12, bitness: 64 }, payload,
+    { cacheRoot: path.join(base, 'c'), gpu: AMPERE, unlock });
+  assert.strictEqual(r.route, 'feeder');
+  assert.strictEqual(r.ok, true, JSON.stringify(r.verify && r.verify.failed));
+  const shaders = path.join(dir, 'reshade-shaders', 'Shaders');
+  assert.ok(fs.existsSync(path.join(shaders, 'DLSS5_Feed.fx')));
+  assert.ok(fs.existsSync(path.join(shaders, 'lumenite_Kernel.fx')));
+  assert.ok(fs.existsSync(path.join(shaders, 'include', 'lumenite_Helpers.fxh')));
+  assert.ok(fs.existsSync(path.join(dir, 'reshade-shaders', 'Textures', 'lumenite_bluenoise256.png')));
+  assert.ok(fs.existsSync(path.join(dir, 'dlss5-feed.addon64')) && fs.existsSync(path.join(dir, 'renodx-dlss5.addon64')));
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'sl.common.dll'), 'utf8'), 'GAME-OWN-SL-COMMON', 'the game keeps its own Streamline file');
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'sl.dlss.dll'), 'utf8'), 'SL-DLSS', 'and gets the ones it was missing');
+  assert.match(fs.readFileSync(path.join(dir, 'ReShadePreset.ini'), 'utf8'), /DLSS5_Feed/);
+  assert.match(fs.readFileSync(path.join(dir, 'dlss5-feed.cfg'), 'utf8'), /enabled=1/);
+  assert.match(fs.readFileSync(path.join(dir, 'ReShade.ini'), 'utf8'), /EnableHooks=1/, 'RTX 30 gets the Streamline-aware hook mode');
+  await feeder.restore(dir);
+  assert.deepStrictEqual(fs.readdirSync(dir).sort(), before, 'restore leaves the folder as it was');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('the hook mode follows the card, and a per-game choice wins', async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-hooks-'));
+  assert.strictEqual(feeder.hooksFor(AMPERE), 1);
+  assert.strictEqual(feeder.hooksFor({ dlss5: 'patch', series: 40 }), 1);
+  assert.strictEqual(feeder.hooksFor(BLACKWELL), 2);
+  const payload = fixturePayload(path.join(base, 'p'));
+  const unlock = { enabled: true, source: 'own', runtime: payload.nvngxNrUniversal };
+  const a = path.join(base, 'a'); const exeA = gameWithDlss(a);
+  await feeder.install({ exe: exeA, api: 'dxgi', dx: 12, bitness: 64 }, payload, { cacheRoot: path.join(base, 'c'), gpu: BLACKWELL, unlock });
+  assert.match(fs.readFileSync(path.join(a, 'ReShade.ini'), 'utf8'), /EnableHooks=2/);
+  const b = path.join(base, 'b'); const exeB = gameWithDlss(b);
+  await feeder.install({ exe: exeB, api: 'dxgi', dx: 12, bitness: 64 }, payload, { cacheRoot: path.join(base, 'c'), gpu: BLACKWELL, unlock, hooks: 1 });
+  assert.match(fs.readFileSync(path.join(b, 'ReShade.ini'), 'utf8'), /EnableHooks=1/);
   fs.rmSync(base, { recursive: true, force: true });
 });

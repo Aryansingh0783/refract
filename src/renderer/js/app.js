@@ -37,6 +37,7 @@
     });
     if (view === 'performance') loadLadder();
     if (view === 'looks') ensureImage();
+    if (view === 'cards') renderCards();
   }
   $('#gpuOrb').addEventListener('click', () => {
     document.querySelectorAll('.dock-items [data-view]').forEach(x => x.toggleAttribute('aria-current', x.dataset.view === 'performance'));
@@ -374,6 +375,120 @@
     if (!v || !v.checks) return '';
     const rows = v.checks.map(c => `<li class="${c.ok ? 'ok' : 'bad'}"><i class="ph ${c.ok ? 'ph-check' : 'ph-x'}"></i><b>${esc(c.label)}</b>${c.detail ? `<span>${esc(c.detail)}</span>` : ''}</li>`).join('');
     return `<details class="d5-verify"${v.ok ? '' : ' open'}><summary>${v.ok ? 'Everything checks out' : 'What is missing'}</summary><ul>${rows}</ul></details>`;
+  }
+
+  // ================================================================ cards view
+  // One tab per GeForce generation: what Refract does for it, what has actually been proven on
+  // hardware, and the one action that matters for the card in this machine.
+  const SERIES = {
+    50: {
+      name: 'RTX 50 · Blackwell', tier: 'native',
+      status: 'Supported by NVIDIA', level: 'ok',
+      verified: 'Verified here: Cyberpunk 2077 on an RTX 5070, driver 616.92 — the game log shows the neural pass evaluating every frame.',
+      how: [
+        'DLSS 5 neural rendering is enabled for this generation, so nothing has to be unlocked.',
+        'Refract installs the ReShade add-on build, the RenoDX DLSS 5 add-on and a tuned config next to the game.',
+        'A neural-rendering runtime the game already has is kept; a missing one is added.',
+        'Hook mode 2: the add-on hooks NGX only and leaves the game\'s Streamline modules alone.',
+      ],
+      watch: ['Neural rendering is heavy. If a game crashes with out of memory, close browsers and lower Path Tracing or Frame Generation first.'],
+    },
+    40: {
+      name: 'RTX 40 · Ada Lovelace', tier: 'patch',
+      status: 'Community path', level: 'warn',
+      verified: 'Not verified on hardware yet. A first RTX 4050 laptop test failed with "host state incomplete" — the fixes below target exactly that.',
+      how: [
+        'The bundled universal runtime carries Ada (sm_89) kernels and its architecture gate accepts Ada, so the neural pass can run.',
+        'The game\'s own DLSS runtime is upgraded to 310.8 when it ships something older — an old DLSS is what leaves the add-on with an incomplete host state.',
+        'Hook mode 1: the add-on also patches the game\'s Streamline modules, which is what the 1-Click reference ships for pre-Blackwell cards.',
+        'The game is pointed at the discrete GPU, so a laptop cannot quietly run it on the iGPU.',
+      ],
+      watch: [
+        'Laptop cards have less VRAM: 6 GB on a 4050. Neural rendering may not fit alongside path tracing.',
+        'Frame rates drop much further than on RTX 50.',
+      ],
+    },
+    30: {
+      name: 'RTX 30 · Ampere', tier: 'patch',
+      status: 'Community path', level: 'warn',
+      verified: 'Not verified on hardware yet. On an RTX 3060 the game log said the runtime was never in the folder — Refract now checks that after every install and offers a repair.',
+      how: [
+        'The bundled universal runtime carries Ampere (sm_86) kernels and accepts Ampere. Refract 0.2 shipped an Ada-only build that refused this generation; games set up then show a Repair.',
+        'The game\'s own DLSS runtime is upgraded to 310.8 when it is older.',
+        'Hook mode 1, as on RTX 40.',
+        'The game is pointed at the discrete GPU.',
+      ],
+      watch: [
+        'Antivirus: a modified NVIDIA runtime is the kind of file real-time protection quarantines seconds after it is written. If DLSS 5 vanishes, add the game folder as an exclusion and repair.',
+        'This is the heaviest generation to run neural rendering on. Neural Screen\'s reduced-resolution mode is often the better trade.',
+      ],
+    },
+    20: {
+      name: 'RTX 20 · Turing', tier: 'unsupported',
+      status: 'Cannot run DLSS 5', level: 'bad',
+      verified: 'Settled by the runtime itself: every build refuses the Turing architecture (0x160), so there is nothing to install.',
+      how: ['Refract reports this card as unsupported instead of installing something that stays off.'],
+      watch: ['Neural Screen cannot help either — the same runtime refuses Turing.'],
+    },
+  };
+
+  function myseries() { return (state.gpu && state.gpu.series) || null; }
+
+  // Jump to a game's Setup tab from anywhere, moving the dock with us.
+  function gotoLibrary(id) {
+    const b = document.querySelector('.dock-items [data-view="library"]');
+    if (b) b.click(); else show('library');
+    state.tab = 'setup';
+    if (id && id !== state.selected) select(id); else renderHero();
+  }
+
+  function renderCards() {
+    const el = $('#cardBody');
+    if (!el) return;
+    const pick = state.cardTab || myseries() || 50;
+    const s = SERIES[pick] || SERIES[50];
+    const mine = myseries() === pick;
+    const games = state.games.filter(g => g.dlss5);
+    const installed = games.filter(g => g.dlss5.installed);
+    const attention = installed.filter(g => g.dlss5.needsAttention);
+    const lead = $('#cardsLead');
+    if (lead) lead.textContent = state.gpu && state.gpu.name
+      ? `${state.gpu.name}${state.gpu.driver ? ' · driver ' + state.gpu.driver : ''} — pick a generation to see exactly what Refract does for it.`
+      : 'What Refract does for each GeForce generation, and what it can prove.';
+    el.innerHTML = `
+      <div class="card-head ${s.level}">
+        <div><b>${esc(s.name)}</b><span>${esc(s.status)}${mine ? ' · this is your card' : ''}</span></div>
+        ${mine && s.tier !== 'unsupported' ? `<button class="btn glassy sm" data-card="apply"><i class="ph ph-lightning"></i>Set up a game</button>` : ''}
+      </div>
+      <p class="card-verified">${esc(s.verified)}</p>
+      <div class="card-h"><h3>What Refract does</h3></div>
+      <ul class="card-list">${s.how.map(h => `<li><i class="ph ph-check"></i><span>${h}</span></li>`).join('')}</ul>
+      <div class="card-h"><h3>Worth knowing</h3></div>
+      <ul class="card-list warn">${s.watch.map(h => `<li><i class="ph ph-warning"></i><span>${h}</span></li>`).join('')}</ul>
+      ${mine ? `
+      <div class="card-h"><h3>On this machine</h3></div>
+      <dl class="kv">
+        <dt>Card</dt><dd>${esc(state.gpu.name || 'unknown')}</dd>
+        <dt>Driver</dt><dd>${esc(state.gpu.driver || 'unknown')}${state.gpu.driverStatus === 'older' ? ' (older than the build this was tested on)' : ''}</dd>
+        <dt>DLSS 5</dt><dd>${s.tier === 'native' ? 'supported as shipped' : s.tier === 'patch' ? 'through the universal runtime' : 'not possible'}</dd>
+        <dt>Games set up</dt><dd>${installed.length}${attention.length ? ` · ${attention.length} need a repair` : ''}</dd>
+      </dl>
+      ${attention.length ? `<div class="card-fix"><span>${attention.map(g => esc(g.name)).join(', ')} ${attention.length > 1 ? 'are' : 'is'} missing something DLSS 5 needs.</span>
+        <button class="btn glassy sm" data-card="fix"><i class="ph ph-wrench"></i>Open the first one</button></div>` : ''}
+      ${s.tier === 'patch' ? `<label class="ns-check"><input type="checkbox" id="cardSr" ${state.settings && state.settings.dlss5UpgradeSr !== false ? 'checked' : ''}> Upgrade a game's own DLSS runtime when Refract's is newer (recommended on this card)</label>` : ''}
+      ` : ''}`;
+    const apply = el.querySelector('[data-card="apply"]');
+    if (apply) apply.addEventListener('click', () => {
+      const target = attention[0] || games.find(g => !g.dlss5.installed) || state.games[0];
+      if (target) { gotoLibrary(target.id); }
+    });
+    const fix = el.querySelector('[data-card="fix"]');
+    if (fix) fix.addEventListener('click', () => gotoLibrary(attention[0].id));
+    const sr = $('#cardSr', el);
+    if (sr) sr.addEventListener('change', async () => {
+      const r = await call(api.patchSettings, { dlss5UpgradeSr: sr.checked }).catch(() => null);
+      if (r) state.settings = r.settings; else sr.checked = !sr.checked;
+    });
   }
 
   // Neural Screen: the bundled NeuralScreen engine. It processes the screen, not the game, so
@@ -831,6 +946,7 @@
     if (r) Prism.toast('Diagnostics saved', (g ? g.name + ': ' : '') + 'the zip is in your Downloads folder.');
     b.disabled = false;
   });
+  Prism.seg($('#cardSeg'), v => { state.cardTab = Number(v); renderCards(); });
   $('#help').addEventListener('click', openGuide);
   $('#openGuide').addEventListener('click', openGuide);
   $('#restoreEverything').addEventListener('click', async e => {
@@ -867,6 +983,9 @@
       state.values = { ...defaults(), ...s.settings.looks };
       state.transition = s.settings.transition ?? 0.6;
       renderSettings(); renderDriver(); renderParams(); renderTelemetry();
+      state.cardTab = (s.gpu && s.gpu.series) || 50;
+      const cs = $('#cardSeg');
+      if (cs) { cs.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(Number(b.dataset.v) === state.cardTab))); Prism.segMove(cs); }
       if (s.games.length) { state.games = s.games; renderShelf(); select((visibleGames()[0] || s.games[0]).id); }
       else await scan();
       api.ready({ ok: true, games: state.games.length });

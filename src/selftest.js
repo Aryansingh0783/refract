@@ -164,7 +164,8 @@ async function run(ctx) {
     const assets = require('./core/dlss5assets');
     const need = ['reshade/ReShade64.dll', 'addons/renodx-dlss5.addon64', 'addons/dlss5-bridge.addon64', assets.NR_REL, assets.SR_REL, assets.SL_NR_REL,
       'feeder/dlss5-feed.addon64', 'feeder/DLSS5_Feed.fx', 'feeder/headers/ReShade.fxh',
-      'neuralscreen/main.py', 'neuralscreen/runtime/pythonw.exe', 'neuralscreen/native/nvngx.dll'];
+      'neuralscreen/main.py', 'neuralscreen/runtime/pythonw.exe', 'neuralscreen/native/nvngx.dll',
+      assets.OPTI_DLL_REL, assets.OPTI_XESS_REL];
     const bad = need.filter(r => !bundle.file(r));
     const nr = bundle.file(assets.NR_REL);
     const nrOk = !!nr && bundle.sha256File(nr) === assets.UNIVERSAL_NR_SHA256;
@@ -254,7 +255,7 @@ async function run(ctx) {
     await until(() => wc.executeJavaScript('!!document.querySelector(".capsule")'), 20000, 300);
     await sleep(1600);
     const shots = [];
-    for (const v of ['library', 'performance', 'looks', 'settings']) {
+    for (const v of ['library', 'performance', 'cards', 'looks', 'settings']) {
       await wc.executeJavaScript(`document.querySelector('.dock [data-view="${v}"]').click()`);
       await sleep(v === 'looks' ? 2600 : 1400);
       const img = await wc.capturePage();

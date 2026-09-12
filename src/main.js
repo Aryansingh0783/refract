@@ -401,6 +401,7 @@ function registerIpc() {
     }
     if (patch.startLook) allowed.startLook = patch.startLook;
     if (patch.engine) allowed.engine = patch.engine === 'screen' ? 'screen' : 'ingame';
+    if ('hooks' in patch) allowed.hooks = patch.hooks === 1 || patch.hooks === 2 ? patch.hooks : null;
     store.patchGame(id, allowed);
     const g = findGame(id);
     if (allowed.startLook && g.looks && g.looks.installed) {
@@ -462,6 +463,7 @@ function registerIpc() {
       installed,
       verify: installed ? feeder.verify(dir, { gpu, unlock, route: feeder.status(dir).route }) : null,
       dlssSr: srInfo(dir),
+      hooks: { perGame: store.game(gameId).hooks || null, auto: feeder.hooksFor(gpu) },
       upgradeSr: store.get().dlss5UpgradeSr !== false,
       log: readGameLog(g),
       eligible: gate.ok,
@@ -499,6 +501,7 @@ function registerIpc() {
           gpu,
           unlock: unlockSetting(),
           upgradeSr: store.get().dlss5UpgradeSr !== false,
+          hooks: store.game(gameId).hooks || null,
         },
       );
     } catch (e) {

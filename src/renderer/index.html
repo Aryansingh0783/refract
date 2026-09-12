@@ -42,6 +42,7 @@
       <span class="dock-ind" aria-hidden="true"></span>
       <button data-view="library" aria-current="page"><i class="ph ph-squares-four" aria-hidden="true"></i><span>Library</span></button>
       <button data-view="performance"><i class="ph ph-gauge" aria-hidden="true"></i><span>Perf</span></button>
+      <button data-view="cards"><i class="ph ph-graphics-card" aria-hidden="true"></i><span>Cards</span></button>
       <button data-view="looks"><i class="ph ph-aperture" aria-hidden="true"></i><span>Looks</span></button>
       <button data-view="settings"><i class="ph ph-sliders-horizontal" aria-hidden="true"></i><span>Settings</span></button>
     </div>
@@ -130,6 +131,19 @@
     </section>
 
     <!-- ============================== SETTINGS -->
+    <section class="view" id="view-cards" hidden>
+      <div class="view-head"><h1>Your card</h1><p id="cardsLead">What Refract does for each GeForce generation, and what it can prove.</p></div>
+      <div class="cards-wrap">
+        <div class="seg block" id="cardSeg" role="group" aria-label="Card generation"><span class="th"></span>
+          <button data-v="50">RTX 50</button>
+          <button data-v="40">RTX 40</button>
+          <button data-v="30">RTX 30</button>
+          <button data-v="20">RTX 20</button>
+        </div>
+        <div id="cardBody" class="glass pane card-pane"></div>
+      </div>
+    </section>
+
     <section class="view" id="view-settings" hidden>
       <div class="view-head"><h1>Settings</h1></div>
       <div class="settings">

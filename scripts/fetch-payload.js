@@ -64,6 +64,11 @@ const prog = label => {
   for (const f of assets.listFiles(lum, /\.fxh$/i)) put(f, 'lumenite/Shaders/include/' + path.basename(f));
   for (const f of assets.listFiles(lum, /\.(png|jpe?g)$/i)) put(f, 'lumenite/Textures/' + path.basename(f));
 
+  log('OptiScaler ' + assets.SOURCES.optiscaler.version + ' (FSR 2/3 and XeSS games -> DLSS 5)');
+  const opti = await assets.ensureOptiScaler(CACHE, prog('optiscaler'));
+  put(opti.dll, assets.OPTI_DLL_REL);
+  put(opti.xess, assets.OPTI_XESS_REL);
+
   // NeuralScreen: the screen-space engine, and the source of the universal RTX 30/40/50
   // neural-rendering runtime both engines use (one copy, at neuralscreen/native/).
   log('NeuralScreen ' + assets.SOURCES.neuralscreen.version + ' (screen engine + universal RTX 30/40/50 DLSS-NR runtime)');
