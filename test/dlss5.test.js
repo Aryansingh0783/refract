@@ -416,3 +416,95 @@ test('the bundled runtime is the universal build, and 0.2\'s Ada-only build is r
   assert.strictEqual(feeder.nrNeeded(dir, { gpu: BLACKWELL }), false, 'RTX 50 keeps what already works');
   fs.rmSync(base, { recursive: true, force: true });
 });
+
+// ---------------------------------------------------------------- install verification (0.4)
+// The RTX 3060 case: everything installed except the runtime, and the app said "already set up".
+function installedGame(dir, { nr = null, addon = 'renodx-dlss5.addon64', reshade = true, ini = '[GENERAL]\r\n' } = {}) {
+  gameWithDlss(dir);
+  if (reshade) fs.writeFileSync(path.join(dir, 'dxgi.dll'), 'ReShade 6.8.0 Searching for add-ons');
+  if (addon) fs.writeFileSync(path.join(dir, addon), 'ADDON');
+  if (ini != null) fs.writeFileSync(path.join(dir, 'ReShade.ini'), ini);
+  if (nr) fs.writeFileSync(path.join(dir, 'nvngx_dlssnr.dll'), nr);
+  fs.writeFileSync(path.join(dir, 'refract-feeder.json'), JSON.stringify({ version: 5, route: 'native', added: [], replaced: [], notes: [] }));
+  return dir;
+}
+
+test('a game missing the runtime is never reported as "already set up"', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-verify-'));
+  const opts = { bitness: 64, api: 'dxgi', dx: 12 };
+  // runtime switched off: 0.3 said "already set up" with a warning underneath. It is not set up.
+  const off = installedGame(path.join(base, 'off'));
+  const p = feeder.plan(off, { ...opts, gpu: AMPERE, unlock: { enabled: false } });
+  assert.strictEqual(p.ok, false);
+  assert.strictEqual(p.already, true);
+  assert.strictEqual(p.blocked, 'off');
+  assert.match(p.reason, /neural rendering is off/i);
+  assert.doesNotMatch(p.reason, /already set up/i);
+  // runtime simply missing, unlock on: offered as a repair
+  const missing = installedGame(path.join(base, 'missing'));
+  const q = feeder.plan(missing, { ...opts, gpu: AMPERE, unlock: { enabled: true } });
+  assert.strictEqual(q.ok, true);
+  assert.strictEqual(q.repair, true);
+  assert.deepStrictEqual(q.actions, ['nr-runtime']);
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('verify() names exactly what is missing, per route', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-verify2-'));
+  const opts = { gpu: BLACKWELL, unlock: { enabled: true } };
+  const good = installedGame(path.join(base, 'good'), { nr: 'UNIVERSAL-NR' });
+  const v1 = feeder.verify(good, { ...opts, route: 'native' });
+  assert.strictEqual(v1.checks.find(c => c.id === 'runtime').ok, true, 'an existing runtime is kept on RTX 50');
+  assert.strictEqual(v1.checks.find(c => c.id === 'reshade').ok, true);
+  assert.strictEqual(v1.ok, true);
+
+  const noNr = installedGame(path.join(base, 'nonr'));
+  const v2 = feeder.verify(noNr, { ...opts, route: 'native' });
+  assert.strictEqual(v2.ok, false);
+  assert.strictEqual(v2.failed[0].id, 'runtime');
+  assert.match(v2.summary, /Not in the game folder/);
+
+  const limited = installedGame(path.join(base, 'limited'), { nr: 'UNIVERSAL-NR' });
+  fs.writeFileSync(path.join(limited, 'dxgi.dll'), 'ReShade 6.8.0 only limited add-on functionality');
+  const v3 = feeder.verify(limited, { ...opts, route: 'native' });
+  assert.strictEqual(v3.checks.find(c => c.id === 'reshade').ok, false);
+  assert.match(v3.checks.find(c => c.id === 'reshade').detail, /without add-on support/);
+
+  const disabled = installedGame(path.join(base, 'disabled'), { nr: 'UNIVERSAL-NR', ini: '[ADDON]\r\nDisabledAddons=renodx-dlss5.addon64\r\n' });
+  const v4 = feeder.verify(disabled, { ...opts, route: 'native' });
+  assert.strictEqual(v4.checks.find(c => c.id === 'config').ok, false);
+
+  const noAddon = installedGame(path.join(base, 'noaddon'), { nr: 'UNIVERSAL-NR', addon: null });
+  assert.strictEqual(feeder.verify(noAddon, { ...opts, route: 'native' }).checks.find(c => c.id === 'addon').ok, false);
+  assert.strictEqual(feeder.verify(noAddon, { ...opts, route: 'feeder' }).checks.find(c => c.id === 'addon').label, 'DLSS 5 Feeder add-on');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('nrState explains the RTX 30 cases in words a user can act on', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-nrstate-'));
+  const dir = installedGame(path.join(base, 'g'));
+  const legacy = require('../src/core/dlss5assets').LEGACY_NR_SHA256;
+  assert.match(feeder.nrState(dir, { gpu: AMPERE, unlock: { enabled: true } }).detail, /Not in the game folder/);
+  assert.strictEqual(feeder.nrState(dir, { gpu: AMPERE, unlock: { enabled: false } }).why, 'off');
+  assert.strictEqual(feeder.nrState(dir, { gpu: { dlss5: 'unsupported', series: 20 } }).needed, false);
+  fs.writeFileSync(path.join(dir, 'nvngx_dlssnr.dll'), 'UNIVERSAL-NR');
+  // The real universal build is identified by hash; a stranger's build is refused on RTX 30.
+  assert.strictEqual(feeder.nrState(dir, { gpu: AMPERE, unlock: { enabled: true } }).why, 'wrong-build');
+  assert.strictEqual(feeder.nrState(dir, { gpu: BLACKWELL, unlock: { enabled: true } }).ok, true, 'RTX 50 runs what the game already has');
+  assert.strictEqual(feeder.nrState(dir, { gpu: AMPERE, unlock: { enabled: true, source: 'own', runtime: path.join(dir, 'nvngx_dlssnr.dll') } }).ok, true, 'or the file the user chose');
+  assert.strictEqual(legacy.length, 64);
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('install verifies itself and reports the result', async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-installverify-'));
+  const payload = fixturePayload(path.join(base, 'p'));
+  const dir = path.join(base, 'g'); const exe = gameWithDlss(dir);
+  const unlock = { enabled: true, source: 'own', runtime: payload.nvngxNrUniversal }; // the fixture stands in for the bundled build
+  const r = await feeder.install({ exe, api: 'dxgi', dx: 12, bitness: 64 }, payload, { cacheRoot: path.join(base, 'c'), gpu: AMPERE, unlock });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.verify && r.verify.failed));
+  assert.strictEqual(r.verify.ok, true);
+  assert.deepStrictEqual(r.verify.failed, []);
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'nvngx_dlssnr.dll'), 'utf8'), 'UNIVERSAL-NR');
+  fs.rmSync(base, { recursive: true, force: true });
+});

@@ -10,6 +10,9 @@ const library = require('./core/library');
 const dlss = require('./core/dlss');
 const reshade = require('./core/reshade');
 const feeder = require('./core/feeder');
+const reshadelog = require('./core/reshadelog');
+const diagnostics = require('./core/diagnostics');
+const gpupref = require('./core/gpupref');
 const { ladder } = require('./core/display');
 const { Session } = require('./core/session');
 const { NeuralScreen, PROFILES: NS_PROFILES, HOTKEYS: NS_HOTKEYS } = require('./core/neuralscreen');
@@ -57,6 +60,14 @@ function keyToVk(name) {
 
 const exeDirOf = g => g.exeDir || (g.exe ? path.dirname(g.exe) : g.dir);
 
+// Is a process with this executable name alive? Used to refuse writing into a running game.
+async function isRunning(exeName) {
+  try {
+    const r = await win.call('procstate', { name: exeName }, 6000);
+    return Number(r && r.count) > 0;
+  } catch { return false; }
+}
+
 // Has Refract changed anything in this game's folder? Drives the "Restore original" button.
 function modifiedState(g) {
   const dir = exeDirOf(g);
@@ -70,7 +81,10 @@ function modifiedState(g) {
 function publicGame(g) {
   const art = {};
   for (const k of Object.keys(g.art || {})) art[k] = `refract-art://game/${encodeURIComponent(g.id)}/${k}`;
-  return { ...g, art, cfg: store.game(g.id), modified: modifiedState(g) };
+  const dir = exeDirOf(g);
+  let dlss5 = { installed: false, needsAttention: false };
+  try { dlss5 = feeder.quickCheck(dir); } catch {}
+  return { ...g, art, cfg: store.game(g.id), modified: modifiedState(g), dlss5, lastRun: lastRunVerdicts[g.id] || null };
 }
 
 // Undo everything Refract ever changed for one game: DLSS 5 components, looks + the ReShade
@@ -84,6 +98,12 @@ async function restoreGame(g) {
   done.push(...await reshade.removeAll(dir, g.reshadeIni));
   for (const d of (g.dlls || []).filter(x => x.backup)) { await dlss.restore(d.path); done.push(d.file); }
   if (store.get().nativeMode) { await session.restore().catch(() => {}); done.push('desktop resolution'); }
+  const cfg = store.game(g.id);
+  if (cfg.gpuPreference !== undefined && g.exe) {
+    await gpupref.restore(g.exe, cfg.gpuPreference).catch(() => {});
+    store.patchGame(g.id, { gpuPreference: undefined });
+    done.push('graphics preference');
+  }
   return done;
 }
 
@@ -296,6 +316,24 @@ function handle(ch, fn) {
   });
 }
 
+// What the game's own ReShade.log said after the last session, per game.
+const lastRunVerdicts = {};
+function readGameLog(g) {
+  const r = reshadelog.inspectGame(exeDirOf(g));
+  const out = { verdict: r.verdict, line: r.line, at: r.at, file: r.file, evaluations: r.evaluations,
+    adapter: r.adapter, driver: r.driver, addon: r.addon, ...(reshadelog.VERDICTS[r.verdict] || {}) };
+  lastRunVerdicts[g.id] = out;
+  return out;
+}
+
+// A durable record of every install, so a machine that failed can be understood later.
+function logInstall(entry) {
+  try {
+    const line = JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n';
+    fs.appendFileSync(path.join(app.getPath('userData'), 'install.log'), line);
+  } catch {}
+}
+
 function neuralInfo() {
   const av = neural.available(gpu);
   return { available: av.ok, reason: av.reason || null, version: neural.version(), state: neural.state(),
@@ -312,8 +350,11 @@ async function onSessionEvent(ch, d) {
       if (g && store.game(g.id).engine === 'screen' && neural.available(gpu).ok) {
         await neural.start({ ...store.get().neuralScreen, gpu }, g.name);
       }
-    } else if (d.state === 'ended' && neural.startedFor && neural.startedFor === d.game) {
-      await neural.stop();
+    } else if (d.state === 'ended') {
+      if (neural.startedFor && neural.startedFor === d.game) await neural.stop();
+      // The game just wrote its log. Read it and say what actually happened.
+      const g = games.find(x => x.name === d.game);
+      if (g) setTimeout(() => { try { broadcast('gamelog', { gameId: g.id, log: readGameLog(g) }); } catch {} }, 1500);
     }
   } catch (e) { broadcast('neuralscreen', { state: 'error', error: String(e && e.message || e) }); }
 }
@@ -408,8 +449,11 @@ function registerIpc() {
     const dir = g.exeDir || (g.exe ? path.dirname(g.exe) : g.dir);
     const unlock = unlockSetting();
     const gate = feeder.plan(dir, { bitness: g.bitness || 64, api: g.api || 'dxgi', dx: g.dx || null, gpu, unlock });
+    const installed = feeder.status(dir).installed;
     return {
-      installed: feeder.status(dir).installed,
+      installed,
+      verify: installed ? feeder.verify(dir, { gpu, unlock, route: feeder.status(dir).route }) : null,
+      log: readGameLog(g),
       eligible: gate.ok,
       reason: gate.reason || null,
       already: !!gate.already,
@@ -417,6 +461,8 @@ function registerIpc() {
       route: gate.route || null,
       routeLabel: gate.label || null,
       repair: !!gate.repair,
+      blocked: gate.blocked || null,
+      nr: gate.nr || null,
       actions: gate.actions || [],
       gpuName: gpu && gpu.name || null,
       gpuSeries: gpu && gpu.series || null,
@@ -428,17 +474,56 @@ function registerIpc() {
 
   handle('feeder:install', async gameId => {
     const g = findGame(gameId);
-    await feeder.install(
-      { exe: g.exe, api: g.api || 'dxgi', apiLabel: g.apiLabel, bitness: g.bitness || 64, dx: g.dx || null },
-      null,
-      {
-        cacheRoot: cacheRoot(),
-        onProgress: p => broadcast('dlss5:progress', { gameId, ...p }),
-        gpu,
-        unlock: unlockSetting(),
-      },
-    );
-    return reinspect(gameId);
+    // Writing into a folder the game has open is how half-copied DLLs happen.
+    if (g.exe && await isRunning(path.basename(g.exe))) {
+      throw new Error(`${g.name} is running. Close it first — Refract writes files into its folder.`);
+    }
+    let result;
+    try {
+      result = await feeder.install(
+        { exe: g.exe, api: g.api || 'dxgi', apiLabel: g.apiLabel, bitness: g.bitness || 64, dx: g.dx || null },
+        null,
+        {
+          cacheRoot: cacheRoot(),
+          onProgress: p => broadcast('dlss5:progress', { gameId, ...p }),
+          gpu,
+          unlock: unlockSetting(),
+        },
+      );
+    } catch (e) {
+      logInstall({ game: g.name, exe: g.exe, ok: false, error: String(e && e.message || e), gpu: gpu && gpu.name });
+      throw e;
+    }
+    // Hybrid laptops: a game Windows runs on the iGPU can never do DLSS 5.
+    try {
+      const cfg = store.game(g.id);
+      if (g.exe && cfg.gpuPreference === undefined) {
+        const pref = await gpupref.preferHighPerformance(g.exe);
+        if (pref.changed) store.patchGame(g.id, { gpuPreference: pref.previous });
+      }
+    } catch {}
+    logInstall({ game: g.name, exe: g.exe, ok: result.ok, route: result.route, gpu: gpu && gpu.name,
+      notes: result.notes, failed: (result.verify && result.verify.failed || []).map(f => f.id) });
+    const out = await reinspect(gameId);
+    return { ...out, install: { ok: result.ok, route: result.route, notes: result.notes, verify: result.verify } };
+  });
+
+  // The game's own log, re-read on demand (the card asks after a session ends).
+  handle('game:log', async gameId => readGameLog(findGame(gameId)));
+
+  // Everything needed to debug a machine that isn't this one.
+  handle('diagnostics:export', async gameId => {
+    const g = gameId ? findGame(gameId) : null;
+    const out = diagnostics.collect({
+      game: g, exeDir: g ? exeDirOf(g) : null, gpu, settings: store.get(),
+      appVersion: app.getVersion(), userData: app.getPath('userData'),
+      session: session.active ? { game: session.active.game.name, seen: session.active.seen } : null,
+    });
+    const r = await dialog.showSaveDialog(mainWin, { title: 'Save diagnostics', defaultPath: path.join(app.getPath('downloads'), out.name), filters: [{ name: 'Zip archive', extensions: ['zip'] }] });
+    if (r.canceled || !r.filePath) return null;
+    fs.writeFileSync(r.filePath, out.buffer);
+    shell.showItemInFolder(r.filePath);
+    return { path: r.filePath, verdict: out.report.game && out.report.game.log ? out.report.game.log.verdict : null };
   });
 
   // Undo everything Refract ever changed for this game: DLSS 5 components, looks + the

@@ -62,6 +62,8 @@ class NeuralScreen {
   async prepare(onProgress) {
     const src = this.source({ verify: true });
     if (!src) throw new Error('The NeuralScreen engine is missing or damaged in this install. Reinstall Refract.');
+    const gone = KEY_FILES.filter(k => !fs.existsSync(path.join(src, ...k.split('/'))));
+    if (gone.length) throw new Error(`The NeuralScreen engine is damaged: ${gone.join(', ')} missing. Reinstall Refract.`);
     const stampPath = path.join(this.home, '.refract-source');
     const stamp = `${src}|${fs.statSync(path.join(src, 'main.py')).mtimeMs}|${this.version()}`;
     const ready = KEY_FILES.every(k => fs.existsSync(path.join(this.home, ...k.split('/'))));

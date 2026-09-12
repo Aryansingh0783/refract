@@ -1,6 +1,10 @@
 # Refract 0.4 — make DLSS 5 actually run on RTX 30 and 40
 
-Status: draft · Owner: Aryan · Written 2026-09-12 · Target: Refract 0.4.0
+Status: in progress · Owner: Aryan · Written 2026-09-12 · Target: Refract 0.4.0
+
+**Progress:** milestone 0.4.0-alpha is built (install verification, log verdicts, diagnostics export,
+GPU preference). 69 unit tests and 22 self-test checks pass. Remaining: A1–A4 (files from the two
+remote machines), D (DLSS runtime upgrade), F (hooks + artifacting A/B), G (OptiScaler bridge).
 
 ## 1. Why this exists
 
@@ -253,31 +257,32 @@ Legend: `[ ]` to do · **(V)** needs verification on real hardware · **(T)** ne
 - [ ] A2 Same three files from the 4050 machine + Death Stranding folder listing **(V)**
 - [ ] A3 Confirm which Refract version is installed on each (`Refract.exe` file version)
 - [ ] A4 From A1–A3, mark H2/H3/H4 true or false and write the answer into this PRD
-- [ ] A5 Reproduce the 3060 failure locally by installing 0.3.0 into a *fresh copy* of a game folder
+- [x] A5 Reproduce the 3060 failure locally by installing 0.3.0 into a *fresh copy* of a game folder
+      → Reproduced: with the runtime absent and the universal runtime **on**, 0.3 does offer Repair; with it **switched off** 0.3 said "DLSS 5 already set up" — a green badge over a game that cannot run NR. Fixed: that state is now "DLSS 5 will not run yet" with a Turn-it-on button.
       with an old 0.2-style manifest, confirming whether Repair is required and silent
 
 ## B. R1 — install verification and loud failures
 
-- [ ] B1 `verifyInstall(exeDir, {gpu, unlock})` in `src/core/feeder.js`: returns per-item pass/fail
+- [x] B1 `verifyInstall(exeDir, {gpu, unlock})` in `src/core/feeder.js`: returns per-item pass/fail
       (proxy is add-on build, add-on present, NR runtime present + hash, ini section present) **(T)**
-- [ ] B2 `install()` runs it at the end and throws a structured error naming the first failure **(T)**
-- [ ] B3 UI: install result shows the checklist; failure renders **Fix this** wired to repair
-- [ ] B4 App start: scan installed games, badge any needing repair in the library shelf **(T)**
-- [ ] B5 Copy progress + post-copy hash for the 158 MB runtime; explicit disk-full / file-locked errors **(T)**
-- [ ] B6 Refuse to install while the game process is running, with a clear message **(T)**
-- [ ] B7 `%APPDATA%\Refract\install.log`: one entry per install with the resulting manifest
+- [x] B2 `install()` runs it at the end and throws a structured error naming the first failure **(T)**
+- [x] B3 UI: install result shows the checklist; failure renders **Fix this** wired to repair
+- [x] B4 App start: scan installed games, badge any needing repair in the library shelf **(T)**
+- [x] B5 Copy progress + post-copy hash for the 158 MB runtime; explicit disk-full / file-locked errors **(T)**
+- [x] B6 Refuse to install while the game process is running, with a clear message **(T)**
+- [x] B7 `%APPDATA%\Refract\install.log`: one entry per install with the resulting manifest
 
 ## C. R6 — log-based verdicts and diagnostics
 
-- [ ] C1 `src/core/reshadelog.js`: parse a game's `ReShade.log` into
+- [x] C1 `src/core/reshadelog.js`: parse a game's `ReShade.log` into
       `{addonLoaded, runtimeLoaded, featureCreated, evaluations, lastError, adapter, driver, verdict}` **(T)**
-- [ ] C2 Fixtures from the three real logs (5070 working, 3060 "was not found", 4050 "host state
+- [x] C2 Fixtures from the three real logs (5070 working, 3060 "was not found", 4050 "host state
       incomplete") as test cases **(T)**
-- [ ] C3 Game card shows the verdict after a session, with the exact log line
-- [ ] C4 Verdict → action mapping (Repair / Upgrade DLSS / Switch route / Turn DLSS on / Neural Screen)
-- [ ] C5 **Export diagnostics** → `refract-diagnostics-<game>-<date>.zip` (logs, manifests, payload
+- [x] C3 Game card shows the verdict after a session, with the exact log line
+- [x] C4 Verdict → action mapping (Repair / Upgrade DLSS / Switch route / Turn DLSS on / Neural Screen)
+- [x] C5 **Export diagnostics** → `refract-diagnostics-<game>-<date>.zip` (logs, manifests, payload
       check, GPU/driver, Windows build, folder inventory; user paths redacted) **(T)**
-- [ ] C6 Self-test check: the parser classifies all three fixtures correctly
+- [x] C6 Self-test check: the parser classifies all three fixtures correctly
 
 ## D. R3 — DLSS runtime pipeline
 
@@ -291,7 +296,7 @@ Legend: `[ ]` to do · **(V)** needs verification on real hardware · **(T)** ne
 
 ## E. R4 — laptops and hybrid graphics
 
-- [ ] E1 Set `UserGpuPreferences` for the game exe on install; remove it on restore **(T)**
+- [x] E1 Set `UserGpuPreferences` for the game exe on install; remove it on restore **(T)**
 - [ ] E2 Hybrid detection + warning when the log's adapter isn't the NVIDIA card **(V)**
 - [ ] E3 Mobile GPU naming and a VRAM-budget warning under 8 GB
 

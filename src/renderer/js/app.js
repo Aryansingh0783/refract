@@ -89,8 +89,10 @@
       const poster = g.art && g.art.capsule
         ? `<img src="${esc(g.art.capsule)}" alt="" loading="lazy" draggable="false">`
         : `<div class="noart" data-hue="${esc(hueOf(g.name))}"><b>${esc(g.name)}</b></div>`;
-      return `<button class="capsule tilt rise" role="option" data-id="${esc(g.id)}" aria-selected="${g.id === state.selected}" aria-label="${esc(g.name)}" data-i="${Math.min(i, 14)}">
-        <span class="poster spot">${poster}<span class="glare"></span></span>
+      const attention = g.dlss5 && g.dlss5.needsAttention
+        ? `<span class="cap-flag" title="DLSS 5 is installed here but ${esc((g.dlss5.missing || []).join(', '))} is missing"><i class="ph ph-warning"></i>Needs repair</span>` : '';
+      return `<button class="capsule tilt rise" role="option" data-id="${esc(g.id)}" aria-selected="${g.id === state.selected}" aria-label="${esc(g.name)}${g.dlss5 && g.dlss5.needsAttention ? ', needs repair' : ''}" data-i="${Math.min(i, 14)}">
+        <span class="poster spot">${poster}<span class="glare"></span>${attention}</span>
         <span class="cap"><b>${esc(g.name)}</b><small>${d ? 'DLSS ' + esc(shortVer(d.version)) : esc(g.store)}</small></span></button>`;
     }).join('');
     shelf.querySelectorAll('.capsule').forEach(c => c.style.setProperty('--i', c.dataset.i));
@@ -303,8 +305,15 @@
       // neural-rendering runtime) — offer a one-click repair instead of a dead "active" badge.
       html = `<div class="d5-row warn"><div><b>DLSS 5 needs a repair</b><span>${esc(fs.reason || 'Some DLSS 5 files are missing or out of date for this GPU.')}</span></div>
         <button class="btn glassy sm" data-act="feeder-install"><i class="ph ph-wrench"></i>Repair</button></div>${progress}`;
+    } else if (fs && fs.installed && fs.verify && !fs.verify.ok) {
+      // Installed, but the folder does not contain what DLSS 5 needs — the RTX 3060 case.
+      html = `<div class="d5-row warn"><div><b>DLSS 5 will not run yet</b><span>${esc(fs.verify.summary)}</span></div>
+        <button class="btn glassy sm" data-act="feeder-install"><i class="ph ph-wrench"></i>Fix this</button></div>${progress}${checklist(fs.verify)}`;
     } else if (fs && fs.installed) {
-      html = `<div class="d5-row ok"><div><b>DLSS 5 installed</b><span>${esc(fs.routeLabel || 'RenoDX DLSS 5 + ReShade')}. Everything Refract added can be removed with Restore original.</span></div></div>` + nextSteps();
+      html = `<div class="d5-row ok"><div><b>DLSS 5 installed</b><span>${esc(fs.routeLabel || 'RenoDX DLSS 5 + ReShade')}. Everything Refract added can be removed with Restore original.</span></div></div>` + checklist(fs.verify) + nextSteps();
+    } else if (fs && fs.already && fs.blocked) {
+      html = `<div class="d5-row warn"><div><b>DLSS 5 will not run yet</b><span>${esc(fs.reason)}</span></div>
+        ${fs.blocked === 'off' ? '<button class="btn glassy sm" data-act="unlock-on"><i class="ph ph-power"></i>Turn it on</button>' : '<button class="btn glassy sm" data-act="feeder-install"><i class="ph ph-wrench"></i>Fix this</button>'}</div>${progress}`;
     } else if (fs && fs.already) {
       html = `<div class="d5-row ok"><div><b>DLSS 5 already set up</b><span>${esc(fs.reason)}</span></div></div>` + nextSteps();
     } else if (fs && fs.eligible) {
@@ -330,7 +339,34 @@
       html += `<div class="d5-row sub"><div><span>${text}</span></div>${fs.gpuSupport === 'patch'
         ? `<button class="btn ghost sm" data-act="${u.enabled === false ? 'unlock-on' : 'pick-patched'}">${u.enabled === false ? 'Turn on' : own ? 'Change file' : 'Use my own file'}</button>` : ''}</div>`;
     }
+    html += lastRunRow(fs && fs.log);
     el.innerHTML = html;
+  }
+
+  // What the game's own ReShade log said the last time it ran. This is the only honest source
+  // for "is neural rendering actually on", so it gets its own row with the log line and a fix.
+  function lastRunRow(log) {
+    if (!log || log.verdict === 'reshade-missing') return '';
+    const cls = log.level === 'ok' ? 'ok' : log.level === 'bad' ? 'warn' : 'sub';
+    const act = {
+      repair: '<button class="btn glassy sm" data-act="feeder-install"><i class="ph ph-wrench"></i>Repair</button>',
+      'upgrade-dlss': '',
+      diagnostics: '<button class="btn ghost sm" data-act="diagnostics"><i class="ph ph-export"></i>Export diagnostics</button>',
+      'neural-screen': '',
+    }[log.action] || '<button class="btn ghost sm" data-act="diagnostics"><i class="ph ph-export"></i>Export diagnostics</button>';
+    return `<div class="d5-row ${cls}"><div><b>Last run: ${esc(verdictTitle(log.verdict))}</b><span>${esc(log.text || '')}${
+      log.evaluations ? ` (${log.evaluations} evaluations)` : ''}</span>${log.line ? `<code class="d5-log">${esc(log.line.slice(0, 220))}</code>` : ''}</div>${act}</div>`;
+  }
+  const VERDICT_TITLE = { evaluating: 'neural rendering ran', idle: 'nothing evaluated', 'runtime-missing': 'the runtime was missing',
+    'arch-refused': 'this GPU was refused', 'host-state': 'the pass was skipped', 'addon-error': 'the add-on failed',
+    'limited-reshade': 'ReShade has no add-on support', 'addon-missing': 'the add-on did not load', 'no-dlss': 'DLSS was off in the game', unknown: 'unclear' };
+  const verdictTitle = v => VERDICT_TITLE[v] || v;
+
+  // The per-item result of Refract's own check of the game folder.
+  function checklist(v) {
+    if (!v || !v.checks) return '';
+    const rows = v.checks.map(c => `<li class="${c.ok ? 'ok' : 'bad'}"><i class="ph ${c.ok ? 'ph-check' : 'ph-x'}"></i><b>${esc(c.label)}</b>${c.detail ? `<span>${esc(c.detail)}</span>` : ''}</li>`).join('');
+    return `<details class="d5-verify"${v.ok ? '' : ' open'}><summary>${v.ok ? 'Everything checks out' : 'What is missing'}</summary><ul>${rows}</ul></details>`;
   }
 
   // Neural Screen: the bundled NeuralScreen engine. It processes the screen, not the game, so
@@ -440,8 +476,11 @@
         b.disabled = true;
         const prog = $('#d5Prog'); if (prog) prog.hidden = false;
         Prism.toast('Enabling DLSS 5', 'Installing into ' + g.name + '. Your game\'s own files are backed up, never overwritten.');
-        replaceGame(await call(api.feederInstall, g.id));
-        Prism.toast('DLSS 5 ready', 'In the game: Borderless, DLSS on, then Home → Add-ons to tune it.');
+        const ng = await call(api.feederInstall, g.id);
+        replaceGame(ng);
+        const v = ng.install && ng.install.verify;
+        if (v && !v.ok) Prism.toast('DLSS 5 is not complete', v.summary + ' Open the game card for the full list.', 'err');
+        else Prism.toast('DLSS 5 ready', 'In the game: Borderless, DLSS on, then Home → Add-ons to tune it.');
       }
       else if (act === 'feeder-remove') { replaceGame(await call(api.feederRestore, g.id)); Prism.toast('DLSS 5 removed', 'The game folder is back to how it was.'); }
       else if (act === 'restore-all') {
@@ -458,6 +497,12 @@
         Prism.toast('Back to original', ng.restored && ng.restored.length ? 'Removed: ' + ng.restored.join(', ') + '.' : 'Nothing left to undo.');
       }
       else if (act === 'end-session') { await call(api.endSession); }
+      else if (act === 'diagnostics') {
+        b.disabled = true;
+        const r = await call(api.exportDiagnostics, g.id).catch(() => null);
+        if (r) Prism.toast('Diagnostics saved', 'Send this zip on: it has the game\'s ReShade log, what Refract installed and your GPU details. Your user name and paths are removed.');
+        b.disabled = false;
+      }
       else if (act === 'pick-patched') {
         const r = await call(api.pickPatchedRuntime);
         if (r && r.runtime) { Prism.toast('Patched runtime set', 'Refract will use your file instead of downloading one.'); renderDlss5(g); }
@@ -755,6 +800,12 @@
   });
   $('#sessionEnd').addEventListener('click', () => call(api.endSession).catch(() => {}));
   api.on('hotkeys', h => { state.hotkeys = h; renderGuideKey(); });
+  api.on('gamelog', ({ gameId, log }) => {
+    const g = state.games.find(x => x.id === gameId);
+    if (g) g.lastRun = log;
+    if (g && game() === g && state.tab === 'setup') renderDlss5(g);
+    if (log && log.level === 'bad') Prism.toast('Neural rendering did not run', log.text, 'err');
+  });
 
   // ================================================================ first-run guide
   function renderGuideKey() {
@@ -764,6 +815,13 @@
   }
   function openGuide() { renderGuideKey(); const w = $('#welcome'); w.hidden = false; Prism.pop($('.sheet-card', w)); $('#welcomeDone').focus(); }
   function closeGuide() { $('#welcome').hidden = true; if (!state.settings.onboarded) { state.settings.onboarded = true; call(api.markOnboarded).catch(() => {}); } }
+  $('#exportDiag').addEventListener('click', async e => {
+    const b = e.currentTarget; b.disabled = true;
+    const g = game();
+    const r = await call(api.exportDiagnostics, g ? g.id : null).catch(() => null);
+    if (r) Prism.toast('Diagnostics saved', (g ? g.name + ': ' : '') + 'the zip is in your Downloads folder.');
+    b.disabled = false;
+  });
   $('#help').addEventListener('click', openGuide);
   $('#openGuide').addEventListener('click', openGuide);
   $('#restoreEverything').addEventListener('click', async e => {
