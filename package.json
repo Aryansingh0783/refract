@@ -1,9 +1,12 @@
 {
-  "name": "refract",
-  "productName": "Refract",
+  "name": "dihlss5",
+  "productName": "DIHLSS5",
   "version": "0.5.0",
   "description": "DLSS 5 companion: installs DLSS 5 (RenoDX) in-game or runs it screen-space (NeuralScreen) on RTX 30/40/50, with everything bundled.",
-  "author": "Refract",
+  "author": {
+    "name": "Aryan",
+    "url": "https://github.com/Aryansingh0783"
+  },
   "main": "src/main.js",
   "license": "MIT",
   "private": true,
@@ -12,7 +15,7 @@
     "test": "node --test test/*.test.js",
     "selftest": "electron . --selftest",
     "dist": "node scripts/fetch-payload.js && electron-builder --win nsis",
-    "dist:lite": "node scripts/fetch-payload.js --lite && electron-builder --win nsis -c.artifactName=Refract-Setup-${version}-lite.${ext}",
+    "dist:lite": "node scripts/fetch-payload.js --lite && electron-builder --win nsis -c.artifactName=DIHLSS5-Setup-${version}-lite.${ext}",
     "postinstall": "node node_modules/electron/install.js",
     "payload": "node scripts/fetch-payload.js",
     "payload:lite": "node scripts/fetch-payload.js --lite"
@@ -28,7 +31,7 @@
   },
   "build": {
     "appId": "com.refract.app",
-    "productName": "Refract",
+    "productName": "DIHLSS5",
     "directories": {
       "output": "dist",
       "buildResources": "assets"
@@ -48,7 +51,7 @@
         "nsis"
       ],
       "icon": "assets/icon.ico",
-      "artifactName": "Refract-Setup-${version}.${ext}"
+      "artifactName": "DIHLSS5-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -56,7 +59,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Refract",
+      "shortcutName": "DIHLSS5",
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico"
     },

@@ -1,4 +1,4 @@
-/* Refract main window. */
+/* DIHLSS5 main window. */
 (function () {
   'use strict';
   const api = window.refract;
@@ -83,7 +83,7 @@
     if (!list.length) {
       shelf.innerHTML = `<div class="empty"><span class="ic"><i class="ph ph-game-controller"></i></span>
         <b>${state.games.length ? 'Nothing matches' : 'No games found yet'}</b>
-        <p>${state.games.length ? 'Clear the search or switch to All games.' : 'Refract reads Steam, Epic, GOG, Ubisoft, Xbox and EA installs. Add a folder for anything installed elsewhere.'}</p></div>`;
+        <p>${state.games.length ? 'Clear the search or switch to All games.' : 'DIHLSS5 reads Steam, Epic, GOG, Ubisoft, Xbox and EA installs. Add a folder for anything installed elsewhere.'}</p></div>`;
       return;
     }
     shelf.innerHTML = list.map((g, i) => {
@@ -181,7 +181,7 @@
     const running = state.session && state.session.state !== 'ended' && state.session.game === g.name;
     const meta = [
       `<span class="pill"><i class="ph ${STORE_ICON[g.store] || 'ph-folder'}"></i>${esc(STORE_NAME[g.store] || g.store)}</span>`,
-      g.modified && g.modified.length ? `<span class="pill acc"><i class="ph ph-wrench"></i>Refract: ${esc(g.modified.join(', '))}</span>` : '',
+      g.modified && g.modified.length ? `<span class="pill acc"><i class="ph ph-wrench"></i>DIHLSS5: ${esc(g.modified.join(', '))}</span>` : '',
       d ? `<span class="pill mono acc">DLSS ${esc(shortVer(d.version))}</span>` : '<span class="pill">No DLSS runtime found</span>',
       lk.installed ? '<span class="pill ok"><i class="ph ph-aperture"></i>Looks ready</span>' : lk.reshade ? '<span class="pill"><i class="ph ph-aperture"></i>ReShade found</span>' : '',
       tier !== 'native' ? `<span class="pill"><i class="ph ph-monitor"></i>${TIER_LABEL[tier]} output</span>` : '',
@@ -196,9 +196,9 @@
         <div class="actions">
           <span class="${running ? 'beam' : ''}"><button class="liquid-btn" data-act="launch" ${running ? 'disabled' : ''}>
             <i class="ph-fill ${running ? 'ph-broadcast' : 'ph-play'}"></i><span>${running ? 'Running' : 'Play'}</span></button></span>
-          ${running ? '<button class="btn ghost" data-act="end-session" title="Use this if the game is closed but Refract still says Running"><i class="ph ph-stop"></i>Mark as closed</button>' : ''}
+          ${running ? '<button class="btn ghost" data-act="end-session" title="Use this if the game is closed but DIHLSS5 still says Running"><i class="ph ph-stop"></i>Mark as closed</button>' : ''}
           <button class="btn glassy" data-act="overlay" title="${esc(state.hotkeys && state.hotkeys.overlay ? 'In game: ' + state.hotkeys.overlay : 'Show the overlay')}"><i class="ph ph-picture-in-picture"></i>Overlay</button>
-          ${g.modified && g.modified.length ? `<button class="btn ghost" data-act="restore-all" title="Undo everything Refract changed: ${esc(g.modified.join(', '))}"><i class="ph ph-arrow-counter-clockwise"></i><span>Restore original</span></button>` : ''}
+          ${g.modified && g.modified.length ? `<button class="btn ghost" data-act="restore-all" title="Undo everything DIHLSS5 changed: ${esc(g.modified.join(', '))}"><i class="ph ph-arrow-counter-clockwise"></i><span>Restore original</span></button>` : ''}
           <button class="icon-btn" data-act="folder" aria-label="Open game folder" title="Open game folder"><i class="ph ph-folder-open"></i></button>
         </div>
       </div>
@@ -224,7 +224,7 @@
     if (state.tab === 'setup') {
       let looks;
       if (!lk.installed) {
-        looks = `<p class="note">${lk.reshade ? 'ReShade is already here.' : 'Refract installs ReShade for you'} and adds one light effect, backing up any existing config first.</p>
+        looks = `<p class="note">${lk.reshade ? 'ReShade is already here.' : 'DIHLSS5 installs ReShade for you'} and adds one light effect, backing up any existing config first.</p>
           <div class="actions"><button class="btn glassy sm" data-act="install"><i class="ph ph-download-simple"></i>${lk.reshade ? 'Install looks' : 'Install ReShade + looks'}</button></div>`;
       } else {
         const start = cfg.startLook || lk.startLook || 'default';
@@ -245,7 +245,7 @@
           <span class="help">The game's own DLSS 5 toggle key, if it has one (NBA 2K27 uses F9). The overlay sends it for you.</span></div>
         <div class="field rise" data-i="5"><label>Executable to watch</label>
           <div class="exe tile"><span>${esc(cfg.exe || g.exe || 'Not found')}</span><button class="btn ghost sm" data-act="exe">Change</button></div>
-          <span class="help">Refract restores your resolution when this process exits.</span></div>`;
+          <span class="help">DIHLSS5 restores your resolution when this process exits.</span></div>`;
     } else if (state.tab === 'files') {
       html = g.dlls.length ? g.dlls.map((d, i) => `
         <div class="dll tile rise" data-i="${i}"><span class="f">${esc(d.file)}</span>
@@ -253,7 +253,7 @@
           <span class="acts"><button class="btn glassy sm" data-act="swap" data-path="${esc(d.path)}">Replace</button>
           ${d.backup ? `<button class="btn ghost sm" data-act="restore" data-path="${esc(d.path)}">Restore</button>` : ''}</span></div>`).join('') +
           '<p class="note rise" data-i="6">Replace takes a DLL you supply from NVIDIA. The original is backed up once and Restore puts it back.</p>'
-        : '<div class="empty"><span class="ic"><i class="ph ph-cpu"></i></span><b>No DLSS runtime here</b><p>Refract searched this folder ten levels deep.</p></div>';
+        : '<div class="empty"><span class="ic"><i class="ph ph-cpu"></i></span><b>No DLSS runtime here</b><p>DIHLSS5 searched this folder ten levels deep.</p></div>';
     } else {
       const tier = cfg.tier || 'native';
       html = `
@@ -290,7 +290,7 @@
       <li>Start the game and set <b>Display mode: Borderless</b> (or windowed).</li>
       <li>Graphics settings: turn <b>DLSS Super Resolution or DLAA on</b>. DLSS 5 runs on top of it; with FSR/XeSS or DLSS off it stays idle.</li>
       <li>Press <kbd>Home</kbd> for ReShade &rarr; <b>Add-ons</b> &rarr; the RenoDX tab to tune it. <b>F6</b> toggles it, <b>F5</b> shows an A/B split.</li>
-      <li>${ok ? `<kbd>${esc(state.hotkeys.overlay).replace(/\+/g, '</kbd>+<kbd>')}</kbd> opens the Refract overlay.` : 'The Refract overlay needs a free hotkey (Settings).'}</li>
+      <li>${ok ? `<kbd>${esc(state.hotkeys.overlay).replace(/\+/g, '</kbd>+<kbd>')}</kbd> opens the DIHLSS5 overlay.` : 'The DIHLSS5 overlay needs a free hotkey (Settings).'}</li>
       <li>Neural rendering needs extra video and system memory. If the game crashes with <b>out of memory</b>, close browsers and other heavy apps, and lower Path Tracing / Frame Generation first.</li></ol>`;
   }
 
@@ -312,14 +312,14 @@
       html = `<div class="d5-row warn"><div><b>DLSS 5 will not run yet</b><span>${esc(fs.verify.summary)}</span></div>
         <button class="btn glassy sm" data-act="feeder-install"><i class="ph ph-wrench"></i>Fix this</button></div>${progress}${checklist(fs.verify)}`;
     } else if (fs && fs.installed) {
-      html = `<div class="d5-row ok"><div><b>DLSS 5 installed</b><span>${esc(fs.routeLabel || 'RenoDX DLSS 5 + ReShade')}. Everything Refract added can be removed with Restore original.</span></div></div>` + checklist(fs.verify) + nextSteps();
+      html = `<div class="d5-row ok"><div><b>DLSS 5 installed</b><span>${esc(fs.routeLabel || 'RenoDX DLSS 5 + ReShade')}. Everything DIHLSS5 added can be removed with Restore original.</span></div></div>` + checklist(fs.verify) + nextSteps();
     } else if (fs && fs.already && fs.blocked) {
       html = `<div class="d5-row warn"><div><b>DLSS 5 will not run yet</b><span>${esc(fs.reason)}</span></div>
         ${fs.blocked === 'off' ? '<button class="btn glassy sm" data-act="unlock-on"><i class="ph ph-power"></i>Turn it on</button>' : '<button class="btn glassy sm" data-act="feeder-install"><i class="ph ph-wrench"></i>Fix this</button>'}</div>${progress}`;
     } else if (fs && fs.already) {
       html = `<div class="d5-row ok"><div><b>DLSS 5 already set up</b><span>${esc(fs.reason)}</span></div></div>` + nextSteps();
     } else if (fs && fs.eligible) {
-      html = `<div class="d5-row"><div><b>${fs.route === 'feeder' ? 'Add DLSS 5' : 'Upgrade to DLSS 5'}</b><span>${esc(fs.routeLabel || '')}. Everything ships inside Refract; your game's own files are backed up, never overwritten.</span></div>
+      html = `<div class="d5-row"><div><b>${fs.route === 'feeder' ? 'Add DLSS 5' : 'Upgrade to DLSS 5'}</b><span>${esc(fs.routeLabel || '')}. Everything ships inside DIHLSS5; your game's own files are backed up, never overwritten.</span></div>
         <button class="btn glassy sm" data-act="feeder-install"><i class="ph ph-sparkle"></i>Enable DLSS 5</button></div>${progress}`;
     } else {
       html = `<div class="d5-row"><div><b>DLSS 5 can't go into this game</b><span>${esc((fs && fs.reason) || 'Not available for this game.')}${state.neural && state.neural.available ? ' Neural Screen below can still process it from the screen.' : ''}</span></div></div>`;
@@ -328,7 +328,7 @@
     if (fs && fs.warnings && fs.warnings.length && !fs.already) {
       html += `<div class="d5-row warn"><div><b>Heads up</b><span>${esc(fs.warnings[0])}</span></div></div>`;
     }
-    // GPU line: what Refract does for this card, and the override.
+    // GPU line: what DIHLSS5 does for this card, and the override.
     if (fs && (fs.gpuSupport === 'patch' || fs.gpuSupport === 'native')) {
       const u = fs.unlock || {};
       const own = u.source === 'own' && u.runtime;
@@ -337,7 +337,7 @@
         ? `${card}: DLSS 5 neural rendering is supported natively.`
         : u.enabled === false
           ? `${card}: the universal neural-rendering runtime is switched off, so DLSS 5 stays off on this card.`
-          : `${card}: Refract installs the universal RTX 30/40/50 neural-rendering runtime${own ? ' (your own file)' : ''} so DLSS 5 runs here. Expect a bigger frame-rate cost than on RTX 50.`;
+          : `${card}: DIHLSS5 installs the universal RTX 30/40/50 neural-rendering runtime${own ? ' (your own file)' : ''} so DLSS 5 runs here. Expect a bigger frame-rate cost than on RTX 50.`;
       html += `<div class="d5-row sub"><div><span>${text}</span></div>${fs.gpuSupport === 'patch'
         ? `<button class="btn ghost sm" data-act="${u.enabled === false ? 'unlock-on' : 'pick-patched'}">${u.enabled === false ? 'Turn on' : own ? 'Change file' : 'Use my own file'}</button>` : ''}</div>`;
     }
@@ -345,7 +345,7 @@
     if (fs && fs.dlssSr && (fs.dlssSr.theirs || fs.dlssSr.upgrade)) {
       const sr = fs.dlssSr;
       html += `<div class="d5-row sub"><div><span>Game's DLSS runtime: <b>${esc(sr.theirs || 'unknown')}</b>${
-        sr.upgrade ? ` — Refract can upgrade it to <b>${esc(sr.ours)}</b>, which is what the neural pass expects.` : `. ${esc(sr.why || '')}`}</span></div>${
+        sr.upgrade ? ` — DIHLSS5 can upgrade it to <b>${esc(sr.ours)}</b>, which is what the neural pass expects.` : `. ${esc(sr.why || '')}`}</span></div>${
         sr.upgrade ? '<button class="btn ghost sm" data-act="feeder-install">Upgrade</button>' : ''}</div>`;
     }
     html += lastRunRow(fs && fs.log);
@@ -372,7 +372,7 @@
     'limited-reshade': 'ReShade has no add-on support', 'addon-missing': 'the add-on did not load', 'no-dlss': 'DLSS was off in the game', unknown: 'unclear' };
   const verdictTitle = v => VERDICT_TITLE[v] || v;
 
-  // The per-item result of Refract's own check of the game folder.
+  // The per-item result of DIHLSS5's own check of the game folder.
   function checklist(v) {
     if (!v || !v.checks) return '';
     const rows = v.checks.map(c => `<li class="${c.ok ? 'ok' : 'bad'}"><i class="ph ${c.ok ? 'ph-check' : 'ph-x'}"></i><b>${esc(c.label)}</b>${c.detail ? `<span>${esc(c.detail)}</span>` : ''}</li>`).join('');
@@ -380,7 +380,7 @@
   }
 
   // ================================================================ cards view
-  // One tab per GeForce generation: what Refract does for it, what has actually been proven on
+  // One tab per GeForce generation: what DIHLSS5 does for it, what has actually been proven on
   // hardware, and the one action that matters for the card in this machine.
   const SERIES = {
     50: {
@@ -389,7 +389,7 @@
       verified: 'Verified here: Cyberpunk 2077 on an RTX 5070, driver 616.92 — the game log shows the neural pass evaluating every frame.',
       how: [
         'DLSS 5 neural rendering is enabled for this generation, so nothing has to be unlocked.',
-        'Refract installs the ReShade add-on build, the RenoDX DLSS 5 add-on and a tuned config next to the game.',
+        'DIHLSS5 installs the ReShade add-on build, the RenoDX DLSS 5 add-on and a tuned config next to the game.',
         'A neural-rendering runtime the game already has is kept; a missing one is added.',
         'Hook mode 2: the add-on hooks NGX only and leaves the game\'s Streamline modules alone.',
       ],
@@ -404,7 +404,7 @@
         'The game\'s own DLSS runtime is upgraded to 310.8 when it ships something older — an old DLSS is what leaves the add-on with an incomplete host state.',
         'Hook mode 1: the add-on also patches the game\'s Streamline modules, which is what the 1-Click reference ships for pre-Blackwell cards.',
         'The game is pointed at the discrete GPU, so a laptop cannot quietly run it on the iGPU.',
-        'If it still does not work, Refract writes an error report named after your card onto your Desktop, by itself, with the log line that explains why.',
+        'If it still does not work, DIHLSS5 writes an error report named after your card onto your Desktop, by itself, with the log line that explains why.',
         'Multi Frame Generation: 2X/3X/4X through the bundled dlssg_sm86 engine. Turn it on per game on that game\'s Setup tab.',
       ],
       watch: [
@@ -415,17 +415,17 @@
     30: {
       name: 'RTX 30 · Ampere', tier: 'patch',
       status: 'Community path', level: 'warn',
-      verified: 'Not verified on hardware yet. On an RTX 3060 the game log said the runtime was never in the folder — Refract now checks that after every install and offers a repair.',
+      verified: 'Not verified on hardware yet. On an RTX 3060 the game log said the runtime was never in the folder — DIHLSS5 now checks that after every install and offers a repair.',
       how: [
-        'The bundled universal runtime carries Ampere (sm_86) kernels and accepts Ampere. Refract 0.2 shipped an Ada-only build that refused this generation; games set up then show a Repair.',
+        'The bundled universal runtime carries Ampere (sm_86) kernels and accepts Ampere. DIHLSS5 0.2 shipped an Ada-only build that refused this generation; games set up then show a Repair.',
         'The game\'s own DLSS runtime is upgraded to 310.8 when it is older.',
         'Hook mode 1, as on RTX 40.',
         'The game is pointed at the discrete GPU.',
-        'If it still does not work, Refract writes an error report named after your card onto your Desktop, by itself, with the log line that explains why.',
+        'If it still does not work, DIHLSS5 writes an error report named after your card onto your Desktop, by itself, with the log line that explains why.',
         'Multi Frame Generation: 2X/3X/4X through the bundled dlssg_sm86 engine (NVIDIA\'s DLSS-G pipeline with Ampere kernels). Turn it on per game on that game\'s Setup tab.',
       ],
       watch: [
-        'Frame generation adds latency. Refract sets Reflex and a frame cap, but the engine has no Reflex Warp.',
+        'Frame generation adds latency. DIHLSS5 sets Reflex and a frame cap, but the engine has no Reflex Warp.',
         'Antivirus: a modified NVIDIA runtime is the kind of file real-time protection quarantines seconds after it is written. If DLSS 5 vanishes, add the game folder as an exclusion and repair.',
         'This is the heaviest generation to run neural rendering on. Neural Screen\'s reduced-resolution mode is often the better trade.',
       ],
@@ -434,7 +434,7 @@
       name: 'RTX 20 · Turing', tier: 'unsupported',
       status: 'Cannot run DLSS 5', level: 'bad',
       verified: 'Settled by the runtime itself: every build refuses the Turing architecture (0x160), so there is nothing to install.',
-      how: ['Refract reports this card as unsupported instead of installing something that stays off.'],
+      how: ['DIHLSS5 reports this card as unsupported instead of installing something that stays off.'],
       watch: ['Neural Screen cannot help either — the same runtime refuses Turing.'],
     },
   };
@@ -460,15 +460,15 @@
     const attention = installed.filter(g => g.dlss5.needsAttention);
     const lead = $('#cardsLead');
     if (lead) lead.textContent = state.gpu && state.gpu.name
-      ? `${state.gpu.name}${state.gpu.driver ? ' · driver ' + state.gpu.driver : ''} — pick a generation to see exactly what Refract does for it.`
-      : 'What Refract does for each GeForce generation, and what it can prove.';
+      ? `${state.gpu.name}${state.gpu.driver ? ' · driver ' + state.gpu.driver : ''} — pick a generation to see exactly what DIHLSS5 does for it.`
+      : 'What DIHLSS5 does for each GeForce generation, and what it can prove.';
     el.innerHTML = `
       <div class="card-head ${s.level}">
         <div><b>${esc(s.name)}</b><span>${esc(s.status)}${mine ? ' · this is your card' : ''}</span></div>
         ${mine && s.tier !== 'unsupported' ? `<button class="btn glassy sm" data-card="apply"><i class="ph ph-lightning"></i>Set up a game</button>` : ''}
       </div>
       <p class="card-verified">${esc(s.verified)}</p>
-      <div class="card-h"><h3>What Refract does</h3></div>
+      <div class="card-h"><h3>What DIHLSS5 does</h3></div>
       <ul class="card-list">${s.how.map(h => `<li><i class="ph ph-check"></i><span>${h}</span></li>`).join('')}</ul>
       <div class="card-h"><h3>Worth knowing</h3></div>
       <ul class="card-list warn">${s.watch.map(h => `<li><i class="ph ph-warning"></i><span>${h}</span></li>`).join('')}</ul>
@@ -482,7 +482,7 @@
       </dl>
       ${attention.length ? `<div class="card-fix"><span>${attention.map(g => esc(g.name)).join(', ')} ${attention.length > 1 ? 'are' : 'is'} missing something DLSS 5 needs.</span>
         <button class="btn glassy sm" data-card="fix"><i class="ph ph-wrench"></i>Open the first one</button></div>` : ''}
-      ${s.tier === 'patch' ? `<label class="ns-check"><input type="checkbox" id="cardSr" ${state.settings && state.settings.dlss5UpgradeSr !== false ? 'checked' : ''}> Upgrade a game's own DLSS runtime when Refract's is newer (recommended on this card)</label>` : ''}
+      ${s.tier === 'patch' ? `<label class="ns-check"><input type="checkbox" id="cardSr" ${state.settings && state.settings.dlss5UpgradeSr !== false ? 'checked' : ''}> Upgrade a game's own DLSS runtime when DIHLSS5's is newer (recommended on this card)</label>` : ''}
       ` : ''}`;
     const apply = el.querySelector('[data-card="apply"]');
     if (apply) apply.addEventListener('click', () => {
@@ -653,12 +653,12 @@
       else if (act === 'diagnostics') {
         b.disabled = true;
         const r = await call(api.exportDiagnostics, g.id).catch(() => null);
-        if (r) Prism.toast('Diagnostics saved', 'Send this zip on: it has the game\'s ReShade log, what Refract installed and your GPU details. Your user name and paths are removed.');
+        if (r) Prism.toast('Diagnostics saved', 'Send this zip on: it has the game\'s ReShade log, what DIHLSS5 installed and your GPU details. Your user name and paths are removed.');
         b.disabled = false;
       }
       else if (act === 'pick-patched') {
         const r = await call(api.pickPatchedRuntime);
-        if (r && r.runtime) { Prism.toast('Patched runtime set', 'Refract will use your file instead of downloading one.'); renderDlss5(g); }
+        if (r && r.runtime) { Prism.toast('Patched runtime set', 'DIHLSS5 will use your file instead of downloading one.'); renderDlss5(g); }
       }
       else if (act === 'unlock-on') {
         await call(api.patchSettings, { dlss5Unlock: true, dlss5UnlockSource: 'auto' });
@@ -759,7 +759,7 @@
   $('#ladder').addEventListener('click', async e => {
     const b = e.target.closest('[data-tier]'); if (!b) return;
     b.disabled = true;
-    try { const m = await call(api.applyTier, b.dataset.tier); Prism.toast('Output resolution set', `${m.width} x ${m.height}. Native comes back when you quit Refract.`); } catch {}
+    try { const m = await call(api.applyTier, b.dataset.tier); Prism.toast('Output resolution set', `${m.width} x ${m.height}. Native comes back when you quit DIHLSS5.`); } catch {}
     loadLadder();
   });
   $('#restoreNative').addEventListener('click', async () => { try { await call(api.restoreDisplay); Prism.toast('Native resolution restored'); } catch {} loadLadder(); });
@@ -970,7 +970,7 @@
     if (g && game() === g && state.tab === 'setup') renderDlss5(g);
     if (log && log.level === 'bad') Prism.toast('Neural rendering did not run', log.text, 'err');
   });
-  // Refract wrote a failure report by itself (RTX 30/40 only). Say where it went.
+  // DIHLSS5 wrote a failure report by itself (RTX 30/40 only). Say where it went.
   api.on('errorreport', ev => {
     if (!ev || !ev.path) return;
     Prism.toast('Error report saved to your Desktop',
@@ -985,6 +985,18 @@
   }
   function openGuide() { renderGuideKey(); const w = $('#welcome'); w.hidden = false; Prism.pop($('.sheet-card', w)); $('#welcomeDone').focus(); }
   function closeGuide() { $('#welcome').hidden = true; if (!state.settings.onboarded) { state.settings.onboarded = true; call(api.markOnboarded).catch(() => {}); } }
+  // Who made this. Filled from the main process so the name and link live in one place.
+  function renderPublisher() {
+    const pub = state.publisher || {};
+    const n = $('#aboutName'), by = $('#aboutBy'), link = $('#pubLink');
+    if (n) n.textContent = 'DIHLSS5' + (state.settings && state.settings.version ? '' : '');
+    if (by) by.textContent = 'Published by ' + (pub.name || 'Aryan');
+    if (link && pub.github) {
+      link.href = pub.github;
+      link.addEventListener('click', e => { e.preventDefault(); call(api.openExternal, pub.github).catch(() => {}); });
+    }
+  }
+
   $('#exportDiag').addEventListener('click', async e => {
     const b = e.currentTarget; b.disabled = true;
     const g = game();
@@ -1001,6 +1013,7 @@
   });
   Prism.seg($('#cardSeg'), v => { state.cardTab = Number(v); renderCards(); });
   $('#help').addEventListener('click', openGuide);
+  renderPublisher();
   $('#openGuide').addEventListener('click', openGuide);
   $('#restoreEverything').addEventListener('click', async e => {
     const b = e.currentTarget;
@@ -1014,7 +1027,7 @@
       const report = await call(api.restoreEverything);
       const ok = report.filter(r => !r.error), bad = report.filter(r => r.error);
       Prism.toast(ok.length ? `Restored ${ok.length} game${ok.length === 1 ? '' : 's'}` : 'Nothing to restore',
-        bad.length ? `Couldn't restore: ${bad.map(r => r.game).join(', ')}` : ok.map(r => r.game).join(', ') || 'No game has Refract changes.', bad.length ? 'err' : undefined);
+        bad.length ? `Couldn't restore: ${bad.map(r => r.game).join(', ')}` : ok.map(r => r.game).join(', ') || 'No game has DIHLSS5 changes.', bad.length ? 'err' : undefined);
       scan();
     } finally { b.disabled = false; delete b.dataset.armed; b.classList.remove('armed'); b.querySelector('span').textContent = 'Restore all'; }
   });

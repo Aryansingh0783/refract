@@ -21,6 +21,9 @@ const { Session } = require('./core/session');
 const { NeuralScreen, PROFILES: NS_PROFILES, HOTKEYS: NS_HOTKEYS } = require('./core/neuralscreen');
 const { LOOKS, KEYCODES } = require('./shared/looks');
 
+// Who made this, shown in the app and in the diagnostics bundle.
+const PUBLISHER = { name: 'Aryan', github: 'https://github.com/Aryansingh0783', repo: 'https://github.com/Aryansingh0783/refract' };
+
 const SELFTEST = process.argv.includes('--selftest');
 // Headless: undo Refract's changes in every game, then exit. Run by the uninstaller.
 const RESTORE_ALL = process.argv.includes('--restore-all');
@@ -311,6 +314,27 @@ function registerShortcuts() {
   return failed;
 }
 
+// The app was called Refract until 0.5.0, so Electron kept its settings in Roaming\\Refract.
+// Renaming the product moves userData to Roaming\\DIHLSS5 and would silently orphan every saved
+// setting and per-game record — including which games have DLSS 5 installed. Carry them across
+// once, and leave the old folder alone so an older build still works.
+function migrateUserData() {
+  try {
+    const dir = app.getPath('userData');
+    if (fs.existsSync(path.join(dir, 'settings.json'))) return;      // already ours
+    const legacy = path.join(path.dirname(dir), 'Refract');
+    if (legacy === dir || !fs.existsSync(path.join(legacy, 'settings.json'))) return;
+    fs.mkdirSync(dir, { recursive: true });
+    for (const name of fs.readdirSync(legacy)) {
+      const from = path.join(legacy, name), to = path.join(dir, name);
+      if (fs.existsSync(to)) continue;
+      try { fs.cpSync(from, to, { recursive: true }); } catch {}
+    }
+    fs.writeFileSync(path.join(dir, 'migrated-from-refract.txt'),
+      `Settings carried over from ${legacy} on ${new Date().toISOString()}.\n`);
+  } catch {}
+}
+
 // ---------------------------------------------------------------- IPC
 function handle(ch, fn) {
   ipcMain.handle(ch, async (_e, ...args) => {
@@ -473,6 +497,7 @@ async function onSessionEvent(ch, d) {
 
 function registerIpc() {
   handle('app:state', async () => ({
+    publisher: PUBLISHER,
     settings: store.get(), gpu, telemetry: lastTelemetry, games: games.map(publicGame),
     looks: LOOKS, currentLook, platform: process.platform, selftest: SELFTEST,
     session: session.active ? { state: session.active.seen ? 'running' : 'launching', game: session.active.game.name } : null,
@@ -863,7 +888,7 @@ function registerIpc() {
   });
 
   handle('shell:open', async url => {
-    if (!/^https:\/\/(reshade\.me|www\.nvidia\.com|developer\.nvidia\.com)\//.test(url)) throw new Error('Blocked URL');
+    if (!/^https:\/\/(reshade\.me|www\.nvidia\.com|developer\.nvidia\.com|github\.com)\//.test(url)) throw new Error('Blocked URL');
     await shell.openExternal(url);
   });
 }
@@ -878,6 +903,7 @@ async function readImage(p) {
 // ---------------------------------------------------------------- lifecycle
 app.whenReady().then(async () => {
   app.setAppUserModelId('com.refract.app');
+  migrateUserData();
   store = new Store(app.getPath('userData'));
   win = new WinHelper(path.join(__dirname, '..', 'scripts', 'winhelper.ps1'));
   session = new Session(win, store, (ch, d) => { broadcast(ch, d); onSessionEvent(ch, d); });

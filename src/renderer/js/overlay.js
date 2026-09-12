@@ -1,4 +1,4 @@
-/* Refract overlay window. */
+/* DIHLSS5 overlay window. */
 (function () {
   'use strict';
   const api = window.refract;
@@ -18,7 +18,7 @@
 
   function renderContext() {
     const g = ctx && ctx.game;
-    $('#gameName').textContent = g ? g.name : 'Refract';
+    $('#gameName').textContent = g ? g.name : 'DIHLSS5';
     $('#procName').textContent = ctx && ctx.foreground ? ctx.foreground + '.exe in focus' : 'No game in focus';
     const key = g && g.cfg && g.cfg.neuralKey;
     $('#neural').disabled = !key;

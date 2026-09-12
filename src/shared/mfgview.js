@@ -34,13 +34,13 @@
       '</div>';
     const cap = p.cap
       ? `Capped at ${p.cap} fps${p.realFps ? ` — the game itself renders about ${p.realFps} fps` : ''}.`
-      : 'No frame cap yet: Refract works one out from your display’s refresh rate.';
+      : 'No frame cap yet: DIHLSS5 works one out from your display’s refresh rate.';
 
     if (!on) {
       return head +
         '<div class="d5-row"><div><b>Enable Multi Frame Generation</b><span>Up to ' + mult +
         'X frames on ' + esc(gpuName || 'this card') + ' using ' + esc(m.engine || 'the bundled engine') +
-        '. It ships inside Refract — nothing to download.' +
+        '. It ships inside DIHLSS5 — nothing to download.' +
         (m.experimental ? ' <b>Experimental on RTX 20.</b>' : '') +
         '</span></div><button class="btn glassy sm" data-act="mfg-on"><i class="ph ph-film-strip"></i>Enable MFG</button></div>' +
         '<div class="d5-row sub"><div>' + seg + '<span class="mfg-note">' + esc(cap) + '</span></div></div>';
@@ -58,7 +58,7 @@
       '<button class="btn ghost sm" data-act="mfg-reflex">Reflex: ' +
       esc((m.setting && m.setting.reflex) || 'on') + '</button></div>' +
       '<div class="d5-row sub"><div><span>In the game’s own settings, turn <b>DLSS Frame Generation</b> on — ' +
-      'Refract makes it available, the game still has to ask for it.</span></div></div>';
+      'DIHLSS5 makes it available, the game still has to ask for it.</span></div></div>';
   }
 
   return { render, esc };

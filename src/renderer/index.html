@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob: refract-art:; connect-src 'self' refract-art:; style-src 'self'; font-src 'self'; script-src 'self'">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Refract</title>
+<title>DIHLSS5</title>
 <link rel="stylesheet" href="../../node_modules/@fontsource-variable/geist/index.css">
 <link rel="stylesheet" href="../../node_modules/@fontsource/ibm-plex-mono/400.css">
 <link rel="stylesheet" href="../../node_modules/@fontsource/ibm-plex-mono/500.css">
@@ -65,7 +65,7 @@
         </div>
         <button class="icon-btn" id="addFolder" aria-label="Add a game folder" title="Add a game folder"><i class="ph ph-folder-plus" aria-hidden="true"></i></button>
         <button class="icon-btn" id="rescan" aria-label="Rescan library" title="Rescan"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i></button>
-        <button class="icon-btn" id="help" aria-label="How Refract works" title="How Refract works"><i class="ph ph-question" aria-hidden="true"></i></button>
+        <button class="icon-btn" id="help" aria-label="How DIHLSS5 works" title="How DIHLSS5 works"><i class="ph ph-question" aria-hidden="true"></i></button>
       </div>
       <div class="shelf fade-x" id="shelf" role="listbox" aria-label="Games"></div>
     </section>
@@ -89,7 +89,7 @@
         </div>
         <div class="ladder-card glass">
           <div class="card-h"><h3>Output resolution</h3></div>
-          <p class="lede">DLSS 5 neural rendering cost follows the resolution the game outputs. Refract drops the desktop resolution for borderless games and restores it when the game closes.</p>
+          <p class="lede">DLSS 5 neural rendering cost follows the resolution the game outputs. DIHLSS5 drops the desktop resolution for borderless games and restores it when the game closes.</p>
           <div class="ladder" id="ladder"></div>
           <button class="btn ghost" id="restoreNative"><i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i>Restore native</button>
         </div>
@@ -132,7 +132,7 @@
 
     <!-- ============================== SETTINGS -->
     <section class="view" id="view-cards" hidden>
-      <div class="view-head"><h1>Your card</h1><p id="cardsLead">What Refract does for each GeForce generation, and what it can prove.</p></div>
+      <div class="view-head"><h1>Your card</h1><p id="cardsLead">What DIHLSS5 does for each GeForce generation, and what it can prove.</p></div>
       <div class="cards-wrap">
         <div class="seg block" id="cardSeg" role="group" aria-label="Card generation"><span class="th"></span>
           <button data-v="50">RTX 50</button>
@@ -165,13 +165,16 @@
           <div class="card-h"><h3>Driver</h3></div>
           <dl class="kv" id="driverKv"></dl>
           <div class="card-h"><h3>Undo</h3></div>
-          <div class="trow"><div><b>Restore every game</b><small>Removes everything Refract added to any game: DLSS 5, ReShade, looks, swapped DLLs. Uninstalling Refract offers the same.</small></div>
+          <div class="trow"><div><b>Restore every game</b><small>Removes everything DIHLSS5 added to any game: DLSS 5, ReShade, looks, swapped DLLs. Uninstalling DIHLSS5 offers the same.</small></div>
             <button class="btn ghost sm" id="restoreEverything"><i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i><span>Restore all</span></button></div>
           <div class="card-h"><h3>Diagnostics</h3></div>
-          <div class="trow"><div><b>Export a diagnostics bundle</b><small>A zip with the selected game's ReShade log, what Refract installed, the payload check and your GPU details. Your user name and paths are removed. Send it on when DLSS 5 does nothing.</small></div>
+          <div class="trow"><div><b>Export a diagnostics bundle</b><small>A zip with the selected game's ReShade log, what DIHLSS5 installed, the payload check and your GPU details. Your user name and paths are removed. Send it on when DLSS 5 does nothing.</small></div>
             <button class="btn ghost sm" id="exportDiag"><i class="ph ph-export" aria-hidden="true"></i><span>Export</span></button></div>
-          <div class="trow"><div><b>Error report on the Desktop</b><small>On RTX 30 and RTX 40 cards Refract writes this by itself whenever DLSS 5 fails to run — a plain text file named after your card, on your Desktop. Write one now to send before you play.</small></div>
+          <div class="trow"><div><b>Error report on the Desktop</b><small>On RTX 30 and RTX 40 cards DIHLSS5 writes this by itself whenever DLSS 5 fails to run — a plain text file named after your card, on your Desktop. Write one now to send before you play.</small></div>
             <button class="btn ghost sm" id="writeErrorReport"><i class="ph ph-warning-circle" aria-hidden="true"></i><span>Write now</span></button></div>
+          <div class="card-h"><h3>About</h3></div>
+          <div class="trow"><div><b id="aboutName">DIHLSS5</b><small id="aboutBy">Published by Aryan</small></div>
+            <a class="btn ghost sm" id="pubLink" href="#" target="_blank" rel="noopener"><i class="ph ph-github-logo" aria-hidden="true"></i><span>GitHub</span></a></div>
           <button class="btn ghost sm" id="openGuide"><i class="ph ph-question" aria-hidden="true"></i>Show the quick guide</button>
         </div>
       </div>
@@ -182,13 +185,13 @@
     <div class="sheet-card glass strong refract">
       <header class="sheet-head">
         <span class="mark" aria-hidden="true"></span>
-        <div><h2 id="welcomeTitle">Welcome to Refract</h2><p class="lede">DLSS 5 for your games in four steps. Everything is reversible.</p></div>
+        <div><h2 id="welcomeTitle">Welcome to DIHLSS5</h2><p class="lede">DLSS 5 for your games in four steps. Everything is reversible.</p></div>
       </header>
       <ol class="guide">
-        <li><span class="n">1</span><div><b>Pick a game</b><p>Refract finds Steam, Epic, GOG, Ubisoft, Xbox and EA installs. Use <i class="ph ph-folder-plus"></i> for anything else.</p></div></li>
-        <li><span class="n">2</span><div><b>Enable DLSS 5</b><p>In the game's <b>Setup</b> tab. Refract installs ReShade, the RenoDX add-on and the neural-rendering runtime from inside the app &mdash; RTX 30, 40 and 50 cards. If a game can't take it (Vulkan, no DLSS), turn on <b>Neural Screen</b> there instead.</p></div></li>
+        <li><span class="n">1</span><div><b>Pick a game</b><p>DIHLSS5 finds Steam, Epic, GOG, Ubisoft, Xbox and EA installs. Use <i class="ph ph-folder-plus"></i> for anything else.</p></div></li>
+        <li><span class="n">2</span><div><b>Enable DLSS 5</b><p>In the game's <b>Setup</b> tab. DIHLSS5 installs ReShade, the RenoDX add-on and the neural-rendering runtime from inside the app &mdash; RTX 30, 40 and 50 cards. If a game can't take it (Vulkan, no DLSS), turn on <b>Neural Screen</b> there instead.</p></div></li>
         <li><span class="n">3</span><div><b>Set up the game once</b><p>Display mode <b>Borderless</b>, and turn <b>DLSS or DLAA on</b> in its graphics menu. DLSS 5 runs on top of the game's DLSS.</p></div></li>
-        <li><span class="n">4</span><div><b>Play and tune</b><p>Press <kbd>Home</kbd> in game for ReShade &rarr; Add-ons &rarr; RenoDX. <span id="guideOverlayKey">Ctrl + Alt + R</span> opens Refract's overlay. <b>Restore original</b> undoes everything.</p></div></li>
+        <li><span class="n">4</span><div><b>Play and tune</b><p>Press <kbd>Home</kbd> in game for ReShade &rarr; Add-ons &rarr; RenoDX. <span id="guideOverlayKey">Ctrl + Alt + R</span> opens DIHLSS5's overlay. <b>Restore original</b> undoes everything.</p></div></li>
       </ol>
       <p class="note sheet-foot"><i class="ph ph-shield-warning"></i> Don't use it in online or anti-cheat games &mdash; ReShade can get you banned there.</p>
       <div class="actions"><button class="liquid-btn" id="welcomeDone"><span>Got it</span></button></div>
