@@ -3,6 +3,7 @@
   'use strict';
   const api = window.refract;
   const { LOOKS, defaults, gradeImage } = window.RefractLooks;
+  const mfgView = window.RefractMfgView;
   const $ = (s, r = document) => r.querySelector(s);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const TIER_LABEL = { native: 'Native', balanced: 'Balanced', performance: 'Performance' };
@@ -348,6 +349,7 @@
         sr.upgrade ? '<button class="btn ghost sm" data-act="feeder-install">Upgrade</button>' : ''}</div>`;
     }
     html += lastRunRow(fs && fs.log);
+    html += mfgView.render(fs && fs.mfg, fs && fs.gpuName);
     el.innerHTML = html;
   }
 
@@ -609,6 +611,28 @@
         else Prism.toast('DLSS 5 ready', 'In the game: Borderless, DLSS on, then Home → Add-ons to tune it.');
       }
       else if (act === 'feeder-remove') { replaceGame(await call(api.feederRestore, g.id)); Prism.toast('DLSS 5 removed', 'The game folder is back to how it was.'); }
+      else if (act === 'mfg-on') {
+        b.disabled = true;
+        const m = await call(api.setMfg, g.id, { enabled: true }).catch(() => null);
+        if (m) {
+          Prism.toast('Multi Frame Generation on', `Up to ${m.setting.multiplier}X. ${m.installed ? 'Already in the game folder.' : 'Press Enable DLSS 5 (or Repair) to write it in.'}`);
+          renderDlss5(g);
+        }
+        b.disabled = false;
+      }
+      else if (act === 'mfg-off') {
+        await call(api.setMfg, g.id, { enabled: false }).catch(() => {});
+        Prism.toast('Multi Frame Generation off', 'Restore original, or set the game up again, to take it out of the folder.');
+        renderDlss5(g);
+      }
+      else if (act === 'mfg-reflex') {
+        // on -> boost -> off -> on. Boost is the lowest-latency choice this engine offers.
+        const order = ['on', 'boost', 'off'];
+        const cur = b.textContent.replace(/^Reflex:\s*/, '').trim();
+        const next = order[(order.indexOf(cur) + 1) % order.length];
+        await call(api.setMfg, g.id, { reflex: next }).catch(() => {});
+        renderDlss5(g);
+      }
       else if (act === 'restore-all') {
         // Two clicks: the first arms it, so a stray click can't wipe a setup.
         if (!b.dataset.armed) {
@@ -926,6 +950,17 @@
   });
   $('#sessionEnd').addEventListener('click', () => call(api.endSession).catch(() => {}));
   api.on('hotkeys', h => { state.hotkeys = h; renderGuideKey(); });
+  // The multiplier control is re-rendered with the block, so it is bound by delegation.
+  document.addEventListener('click', async e => {
+    const btn = e.target.closest('#mfgSeg button');
+    if (!btn) return;
+    const g = game();
+    if (!g) return;
+    const v = Number(btn.dataset.v);
+    await call(api.setMfg, g.id, { multiplier: v }).catch(() => {});
+    renderDlss5(g);
+  });
+
   api.on('gamelog', ({ gameId, log }) => {
     const g = state.games.find(x => x.id === gameId);
     if (g) g.lastRun = log;

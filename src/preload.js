@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('refract', {
   gameLog: gameId => invoke('game:log', gameId),
   exportDiagnostics: gameId => invoke('diagnostics:export', gameId),
   writeErrorReport: gameId => invoke('errorreport:write', gameId),
+  setMfg: (gameId, patch) => invoke('mfg:set', gameId, patch),
   neuralStatus: () => invoke('neuralscreen:status'),
   neuralStart: gameId => invoke('neuralscreen:start', gameId),
   neuralStop: () => invoke('neuralscreen:stop'),
