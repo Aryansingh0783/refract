@@ -90,10 +90,16 @@ test('state reads only this run from the log', async () => {
   assert.match(st.arch, /no spoof needed/);
 });
 
-test('availability: RTX 20 and GTX are refused, a missing bundle is explained', () => {
+test('availability: RTX 20 and GTX are refused; a damaged copy fails loudly', async () => {
   const f = fixture();
   const ns = new NeuralScreen({ home: f.home, source: f.src });
   assert.strictEqual(ns.available({ dlss5: 'patch', series: 30 }).ok, true);
+  assert.strictEqual(ns.available({ dlss5: 'native', series: 50 }).ok, true);
   assert.match(ns.available({ dlss5: 'unsupported', series: 20 }).reason, /Turing/);
-  assert.strictEqual(new NeuralScreen({ home: f.home }).available({ dlss5: 'native' }).ok, false);
+  assert.match(ns.available({ dlss5: 'unsupported', series: null }).reason, /RTX 30, 40 or 50/);
+  // A source that lost a key file is reported, not silently started.
+  fs.rmSync(path.join(f.src, 'native', 'nvngx_dlssnr.dll'));
+  const broken = new NeuralScreen({ home: path.join(f.base, 'home2'), source: f.src });
+  await assert.rejects(() => broken.prepare(), /damaged/i);
+  assert.ok(!fs.existsSync(path.join(f.base, 'home2', 'main.py')), 'nothing is copied from a damaged source');
 });

@@ -50,15 +50,88 @@ function hashOf(p) {
   } catch { return null; }
 }
 
-// Does this folder still need the neural-rendering runtime put right? (see provisionNr)
-function nrNeeded(exeDir, { gpu, unlock } = {}) {
+// The state of nvngx_dlssnr.dll in a game folder. Without it the add-on loads, hooks DLSS and
+// then logs "nvngx_dlssnr.dll was not found ... NR stays off" — the exact failure seen on an
+// RTX 3060 — so this is the one file whose state is always reported, never assumed.
+function nrState(exeDir, { gpu, unlock } = {}) {
   const tier = (gpu && gpu.dlss5) || 'unknown';
-  if (tier === 'unsupported' || (unlock && unlock.enabled === false)) return false;
-  const dest = path.join(exeDir, 'nvngx_dlssnr.dll');
-  if (!fs.existsSync(dest)) return true;
-  if (tier !== 'patch') return false;
+  const file = path.join(exeDir, 'nvngx_dlssnr.dll');
+  const present = fs.existsSync(file);
+  const optedOut = !!(unlock && unlock.enabled === false);
   const own = unlock && unlock.source === 'own' && unlock.runtime && fs.existsSync(unlock.runtime) ? unlock.runtime : null;
-  return hashOf(dest) !== (own ? hashOf(own) : assets.UNIVERSAL_NR_SHA256);
+  const want = own ? hashOf(own) : assets.UNIVERSAL_NR_SHA256;
+  const hash = present ? hashOf(file) : null;
+  const universal = hash === want;
+  const legacy = hash === assets.LEGACY_NR_SHA256;
+  if (tier === 'unsupported') {
+    return { file, present, hash, ok: false, needed: false, why: 'gpu', detail: 'This GPU cannot run DLSS 5 neural rendering.' };
+  }
+  if (!present) {
+    return { file, present, hash, ok: false, needed: !optedOut, why: optedOut ? 'off' : 'missing',
+      detail: optedOut
+        ? 'Not installed: the neural-rendering runtime is switched off in Settings, so DLSS 5 stays off in this game.'
+        : 'Not in the game folder, so the add-on loads and then does nothing.' };
+  }
+  if (tier === 'patch' && !universal) {
+    return { file, present, hash, ok: false, needed: !optedOut, why: legacy ? 'legacy' : 'wrong-build',
+      detail: legacy
+        ? 'This is Refract 0.2\'s runtime: it has no RTX 30 kernels and its architecture gate refuses Ampere. Repair replaces it.'
+        : 'This build is not the universal runtime, and stock NVIDIA builds only run on RTX 50.' };
+  }
+  return { file, present, hash, ok: true, needed: false, why: null,
+    detail: universal ? 'The universal RTX 30/40/50 runtime.' : 'A runtime the game or you provided.' };
+}
+
+// Does this folder still need the neural-rendering runtime put right? (see provisionNr)
+function nrNeeded(exeDir, opts = {}) { return nrState(exeDir, opts).needed; }
+
+const INI = 'ReShade.ini';
+function iniState(exeDir) {
+  const p = path.join(exeDir, INI);
+  let text = null;
+  try { text = fs.readFileSync(p, 'utf8'); } catch { return { ok: false, detail: 'No ReShade.ini, so ReShade starts with defaults and the add-on may stay disabled.' }; }
+  const disabled = /^DisabledAddons=(.*)$/im.exec(text);
+  const off = disabled ? disabled[1].split(',').map(x => x.trim().toLowerCase()).filter(x => /renodx|dlss5/.test(x)) : [];
+  if (off.length) return { ok: false, detail: `ReShade.ini disables ${off.join(', ')}.` };
+  return { ok: true, detail: /\[RenoDX\.DLSS5\]/i.test(text) ? 'Tuned DLSS 5 settings present.' : 'Present; the add-on will write its own defaults.' };
+}
+
+// A cheap "does this look broken?" for the library shelf: presence only, no hashing, so it can
+// run for every installed game on every refresh.
+function quickCheck(exeDir) {
+  const st = status(exeDir);
+  if (!st.installed) return { installed: false, needsAttention: false };
+  const i = inspect(exeDir);
+  const missing = [];
+  if (!i.reshadeProxy || !i.reshadeIsAddonBuild) missing.push('ReShade add-on build');
+  if (st.route === 'feeder' ? !i.feedAddons.length : !i.renodxAddons.length) missing.push('the DLSS 5 add-on');
+  if (!fs.existsSync(path.join(exeDir, 'nvngx_dlssnr.dll'))) missing.push('the neural-rendering runtime');
+  return { installed: true, needsAttention: missing.length > 0, missing, route: st.route };
+}
+
+// What a finished install has to look like on disk. Every install and every status read runs
+// this, so "installed" always means verified rather than "we copied some files once".
+function verify(exeDir, { gpu = null, unlock = null, route = null } = {}) {
+  const i = inspect(exeDir);
+  const st = status(exeDir);
+  const r = route || st.route || null;
+  const checks = [];
+  const add = (id, label, ok, detail) => checks.push({ id, label, ok: !!ok, detail: detail || null });
+  add('reshade', 'ReShade add-on build next to the game',
+    i.reshadeProxy && i.reshadeIsAddonBuild,
+    !i.reshadeProxy ? 'No ReShade proxy DLL in this folder.' : i.reshadeIsAddonBuild ? i.reshadeProxy : `${i.reshadeProxy} is a ReShade build without add-on support.`);
+  if (r === 'feeder') add('addon', 'DLSS 5 Feeder add-on', i.feedAddons.length, i.feedAddons.join(', ') || 'dlss5-feed.addon64 is missing.');
+  else add('addon', 'RenoDX DLSS 5 add-on', i.renodxAddons.length, i.renodxAddons.join(', ') || 'renodx-dlss5.addon64 is missing.');
+  if (r === 'native+bridge') add('bridge', 'DX11 → DX12 bridge add-on', i.bridgeAddons.length, i.bridgeAddons.join(', ') || 'dlss5-bridge.addon64 is missing.');
+  const nr = nrState(exeDir, { gpu, unlock });
+  add('runtime', 'Neural-rendering runtime (nvngx_dlssnr.dll)', nr.ok, nr.detail);
+  const ini = iniState(exeDir);
+  add('config', 'ReShade.ini lets the add-on load', ini.ok, ini.detail);
+  add('conflicts', 'Only one DLSS add-on in this folder', !i.conflicts.length,
+    i.conflicts.length ? `${i.conflicts.join(', ')} fight over the same NGX hooks.` : null);
+  const failed = checks.filter(c => !c.ok);
+  return { ok: !failed.length, checks, failed, route: r, nr,
+    summary: failed.length ? failed[0].detail || failed[0].label : 'Everything DLSS 5 needs is in place.' };
 }
 
 function inspect(exeDir) {
@@ -132,13 +205,20 @@ function plan(exeDir, opts = {}) {
   // Without nvngx_dlssnr.dll the add-on loads, hooks DLSS, and then does nothing at all.
   if (nrNeeded(exeDir, { gpu, unlock })) actions.push('nr-runtime');
 
+  const nr = nrState(exeDir, { gpu, unlock });
   if (!actions.length) {
+    // "Already set up" with no runtime next to the game is the lie that cost an RTX 3060 user a
+    // week: the add-on loads, logs "nvngx_dlssnr.dll was not found" and nothing happens.
+    if (!nr.ok) {
+      return { ok: false, already: true, blocked: nr.why, route: r.route, actions, warnings, inspect: i, nr,
+        reason: `DLSS 5 is installed here, but neural rendering is off: ${nr.detail}` };
+    }
     const tail = warnings.length ? ' ' + warnings[0] : ' If it still does nothing, turn DLSS on in the game\'s graphics settings.';
-    return { ok: false, already: true, route: r.route, actions, warnings, inspect: i,
+    return { ok: false, already: true, route: r.route, actions, warnings, inspect: i, nr,
       reason: `DLSS 5 is already set up here (ReShade add-on build + ${(i.dlssAddons.join(', ') || 'add-on')}).` + tail };
   }
   const repair = status(exeDir).installed;
-  return { ok: true, route: r.route, label: ROUTE_LABEL[r.route], actions, warnings, inspect: i, repair,
+  return { ok: true, route: r.route, label: ROUTE_LABEL[r.route], actions, warnings, inspect: i, repair, nr,
     reason: actions.length === 1 && actions[0] === 'nr-runtime'
       ? 'The neural-rendering runtime (nvngx_dlssnr.dll) is missing or the wrong build for this GPU, so DLSS 5 stays off.' : undefined };
 }
@@ -160,6 +240,36 @@ async function copyInto(man, src, dest, kind) {
   await fs.promises.mkdir(path.dirname(dest), { recursive: true });
   await track(man, dest, kind);
   await fs.promises.copyFile(src, dest);
+}
+
+// The neural-rendering runtime is 158 MB: worth a progress line, and worth proving it arrived
+// intact. A half-written copy (full disk, antivirus, a locked file) is exactly the state that
+// makes a game log "nvngx_dlssnr.dll was not found" — or load a truncated one.
+async function copyVerified(man, src, dest, kind, onProgress, label) {
+  await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+  await track(man, dest, kind);
+  const total = fs.statSync(src).size;
+  await new Promise((resolve, reject) => {
+    const rs = fs.createReadStream(src);
+    const ws = fs.createWriteStream(dest);
+    let done = 0, last = 0;
+    rs.on('data', c => {
+      done += c.length;
+      if (onProgress && done - last > (4 << 20)) { last = done; onProgress({ label, frac: done / total }); }
+    });
+    rs.on('error', reject); ws.on('error', reject);
+    ws.on('close', resolve);
+    rs.pipe(ws);
+  }).catch(e => {
+    try { fs.rmSync(dest, { force: true }); } catch {}
+    throw new Error(`Could not write ${path.basename(dest)} into the game folder (${e.code || e.message}). Check free space and that the game is closed.`);
+  });
+  const got = bundle.sha256File(dest), want = bundle.sha256File(src);
+  if (got !== want) {
+    try { fs.rmSync(dest, { force: true }); } catch {}
+    throw new Error(`${path.basename(dest)} did not copy correctly (checksum mismatch). Check free disk space and any antivirus that may be scanning the game folder.`);
+  }
+  return dest;
 }
 async function writeInto(man, dest, text, kind) {
   await track(man, dest, kind);
@@ -227,7 +337,9 @@ async function install(game, payload, { cacheRoot, onProgress, gpu = null, unloc
   await provisionNr(man, exeDir, payload, { gpu, unlock, cacheRoot, onProgress });
 
   await fs.promises.writeFile(path.join(exeDir, MANIFEST), JSON.stringify(man, null, 2));
-  return { ...status(exeDir), route, label: ROUTE_LABEL[route], notes: man.notes };
+  // Never report success on trust: read the folder back and check every part DLSS 5 needs.
+  const checked = verify(exeDir, { gpu, unlock, route });
+  return { ...status(exeDir), route, label: ROUTE_LABEL[route], notes: man.notes, verify: checked, ok: checked.ok };
 }
 
 // Every DLSS 5 route needs NVIDIA's neural-rendering runtime, nvngx_dlssnr.dll, next to the
@@ -256,8 +368,8 @@ async function provisionNr(man, exeDir, payload, { gpu, unlock, cacheRoot, onPro
     const want = own ? bundle.sha256File(own) : assets.UNIVERSAL_NR_SHA256;
     if (bundle.sha256File(dest) === want) { man.notes.push(`nvngx_dlssnr.dll is already the build ${label} needs.`); return; }
   }
-  const src = own || payload.nvngxNrUniversal || await assets.ensurePatchedRuntime(cacheRoot, onProgress);
-  await copyInto(man, src, dest, 'runtime-nr');
+  const src = own || payload.nvngxNrUniversal || await assets.ensureUniversalRuntime(cacheRoot, onProgress);
+  await copyVerified(man, src, dest, 'runtime-nr', onProgress, 'Neural-rendering runtime');
   man.notes.push(`Installed the ${own ? 'your' : 'universal'} neural-rendering runtime (nvngx_dlssnr.dll) for ${label}.`);
 }
 
@@ -313,4 +425,4 @@ function status(exeDir) {
   } catch { return { installed: false }; }
 }
 
-module.exports = { install, restore, status, eligible, plan, inspect, routeFor, nrNeeded, ROUTE_LABEL, MANIFEST, ensurePayload: assets.ensurePayload };
+module.exports = { install, restore, status, verify, quickCheck, eligible, plan, inspect, routeFor, nrNeeded, nrState, ROUTE_LABEL, MANIFEST, ensurePayload: assets.ensurePayload };

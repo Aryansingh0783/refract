@@ -172,6 +172,34 @@ async function run(ctx) {
     return { ok: bad.length === 0 && nrOk && lumenite > 0 && streamline > 0, detail: { root: info.root, files: info.files, bad, nrUniversal: nrOk, lumenite, streamline, components: info.components } };
   });
 
+  await check('install verification + log verdicts (the RTX 3060 failure is caught)', async () => {
+    const reshadelog = require('./core/reshadelog');
+    const diagnostics = require('./core/diagnostics');
+    const dir = path.join(os.tmpdir(), 'refract-selftest-verify', 'bin', 'x64');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'game.exe'), 'MZ');
+    fs.writeFileSync(path.join(dir, 'nvngx_dlss.dll'), 'GAME-DLSS');
+    fs.writeFileSync(path.join(dir, 'dxgi.dll'), 'ReShade 6.8.0 Searching for add-ons');
+    fs.writeFileSync(path.join(dir, 'renodx-dlss5.addon64'), 'ADDON');
+    fs.writeFileSync(path.join(dir, 'ReShade.ini'), '[GENERAL]\r\n');
+    fs.writeFileSync(path.join(dir, 'refract-feeder.json'), JSON.stringify({ version: 5, route: 'native', added: [], replaced: [] }));
+    fs.writeFileSync(path.join(dir, 'ReShade.log'), `12:00:00:000 [1] | INFO  | Initializing crosire's ReShade version '6.8.0.2155' (64-bit) loaded from '${dir}\\dxgi.dll' into '${dir}\\game.exe' ...\n` +
+      `12:00:01:000 [1] | INFO  | Registered add-on "DLSS 5 Neural Rendering" v0.2026.828.517 using ReShade API version 18.\n` +
+      `12:00:02:000 [1] | ERROR | [DLSS 5 Neural Rendering] DLSS5 Generic: nvngx_dlssnr.dll was not found in ${dir}. Place NVIDIA's signed nvngx_dlssnr.dll in that folder and restart the game; NR stays off until then\n`);
+    const ampere = { name: 'RTX 3060', dlss5: 'patch', series: 30, arch: 'Ampere' };
+    const v = feeder.verify(dir, { gpu: ampere, unlock: { enabled: true }, route: 'native' });
+    const quick = feeder.quickCheck(dir);
+    const plan = feeder.plan(dir, { bitness: 64, api: 'dxgi', dx: 12, gpu: ampere, unlock: { enabled: true } });
+    const log = reshadelog.inspectGame(dir);
+    const bundleOut = diagnostics.collect({ game: { name: 'Selftest' }, exeDir: dir, gpu: ctx.gpu, appVersion: 'selftest' });
+    const ok = !v.ok && v.failed[0].id === 'runtime' && quick.needsAttention
+      && plan.ok && plan.actions.includes('nr-runtime')
+      && log.verdict === 'runtime-missing' && bundleOut.buffer.length > 300
+      && /^refract-diagnostics-selftest-/.test(bundleOut.name);
+    fs.rmSync(path.join(os.tmpdir(), 'refract-selftest-verify'), { recursive: true, force: true });
+    return { ok, detail: { verifyFailed: v.failed.map(f => f.id), quick, planActions: plan.actions, verdict: log.verdict, zipBytes: bundleOut.buffer.length, zip: bundleOut.name } };
+  });
+
   await check('neuralscreen engine (bundled, RTX 30/40/50)', async () => {
     const { NeuralScreen } = require('./core/neuralscreen');
     const ns = new NeuralScreen({ home: path.join(os.tmpdir(), 'refract-selftest-ns') });
