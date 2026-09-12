@@ -12,8 +12,10 @@
     "test": "node --test test/*.test.js",
     "selftest": "electron . --selftest",
     "dist": "node scripts/fetch-payload.js && electron-builder --win nsis",
+    "dist:lite": "node scripts/fetch-payload.js --lite && electron-builder --win nsis -c.artifactName=Refract-Setup-${version}-lite.${ext}",
     "postinstall": "node node_modules/electron/install.js",
-    "payload": "node scripts/fetch-payload.js"
+    "payload": "node scripts/fetch-payload.js",
+    "payload:lite": "node scripts/fetch-payload.js --lite"
   },
   "dependencies": {
     "@fontsource-variable/geist": "5.3.0",

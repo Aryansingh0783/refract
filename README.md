@@ -130,6 +130,19 @@ Restores are surgical: settings changed since the install (DLSS 5 tuning, key bi
 `scripts/fetch-payload.js` downloads each one at build time, checks it against a pinned
 SHA-256 and lays it out under `payload/`, which is never committed.
 
+### The released installer is the lite build
+
+One file is deliberately **not** inside the public installer: `nvngx_dlssnr.dll`, NVIDIA's
+310.8 neural-rendering runtime. It is not ours to redistribute, so Refract downloads it from
+[NeuralScreen's own release](https://github.com/perseval-BLR/DLSS5-NeuralScreen/releases) the
+first time you enable DLSS 5 or start Neural Screen, checks it against a pinned SHA-256, and
+caches it under `%APPDATA%\Refract`. Nothing else differs — same app, same features, same
+payload. The only thing you notice is one download on first use.
+
+`npm run dist` builds with the runtime inside (local use); `npm run dist:lite` builds the
+redistributable one, and its self-test asserts that the runtime is *absent* so a full build can
+never be published by mistake.
+
 ## Build
 
 ```powershell

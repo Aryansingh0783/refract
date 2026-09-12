@@ -834,7 +834,7 @@ app.whenReady().then(async () => {
   store = new Store(app.getPath('userData'));
   win = new WinHelper(path.join(__dirname, '..', 'scripts', 'winhelper.ps1'));
   session = new Session(win, store, (ch, d) => { broadcast(ch, d); onSessionEvent(ch, d); });
-  neural = new NeuralScreen({ home: path.join(app.getPath('userData'), 'neuralscreen'), emit: broadcast });
+  neural = new NeuralScreen({ home: path.join(app.getPath('userData'), 'neuralscreen'), cacheRoot: cacheRoot(), emit: broadcast });
   nativeTheme.themeSource = 'dark';
   protocol.handle('refract-art', req => serveArt(req).catch(() => new Response('error', { status: 500 })));
   if (RESTORE_ALL) {

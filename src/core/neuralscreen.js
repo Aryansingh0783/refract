@@ -14,7 +14,13 @@ const cp = require('child_process');
 const bundle = require('./bundle');
 
 const PREFIX = 'neuralscreen/';
-const KEY_FILES = ['main.py', 'runtime/pythonw.exe', 'native/nvngx.dll', 'native/nvngx_dlssnr.dll'];
+// The engine itself, always inside the installer.
+const ENGINE_FILES = ['main.py', 'runtime/pythonw.exe', 'native/nvngx.dll'];
+// NVIDIA's neural-rendering runtime. Bundled in a full build; in the public (lite) build it is
+// downloaded and hash-checked from NeuralScreen's own release the first time it is needed,
+// because that DLL is not ours to redistribute.
+const RUNTIME_REL = 'native/nvngx_dlssnr.dll';
+const KEY_FILES = [...ENGINE_FILES, RUNTIME_REL];
 const PROFILES = ['Faithful', 'Natural', 'Strong / Cinematic', 'Extreme / Overdrive'];
 const DEFAULTS = { profile: 'Natural', faster: false, workScale: 0.65 };
 // NeuralScreen's own hotkeys (upstream defaults; Num Lock must be on).
@@ -22,8 +28,9 @@ const HOTKEYS = [['Num2', 'menu'], ['Num1', 'neural rendering on/off'], ['Num5',
   ['Num3', 'screenshot'], ['Num0', 'record'], ['Ctrl+Alt+Q', 'quit']];
 
 class NeuralScreen {
-  constructor({ home, emit = () => {}, spawn = cp.spawn, exec = cp.execFile, source = null } = {}) {
+  constructor({ home, cacheRoot = null, emit = () => {}, spawn = cp.spawn, exec = cp.execFile, source = null } = {}) {
     this.home = home;          // userData/neuralscreen
+    this.cacheRoot = cacheRoot; // where a lite build downloads the runtime to
     this.emit = emit;
     this.spawn = spawn;
     this.exec = exec;
@@ -37,7 +44,7 @@ class NeuralScreen {
   // hashes (158 MB for the runtime), which only start() pays for.
   source({ verify = false } = {}) {
     if (this.sourceOverride) return this.sourceOverride;
-    const ok = KEY_FILES.every(k => (verify ? bundle.file(PREFIX + k) : bundle.has(PREFIX + k)));
+    const ok = ENGINE_FILES.every(k => (verify ? bundle.file(PREFIX + k) : bundle.has(PREFIX + k)));
     const b = bundle.info();
     return ok && b ? path.join(b.root, 'neuralscreen') : null;
   }
@@ -62,25 +69,48 @@ class NeuralScreen {
   async prepare(onProgress) {
     const src = this.source({ verify: true });
     if (!src) throw new Error('The NeuralScreen engine is missing or damaged in this install. Reinstall Refract.');
-    const gone = KEY_FILES.filter(k => !fs.existsSync(path.join(src, ...k.split('/'))));
+    const gone = ENGINE_FILES.filter(k => !fs.existsSync(path.join(src, ...k.split('/'))));
     if (gone.length) throw new Error(`The NeuralScreen engine is damaged: ${gone.join(', ')} missing. Reinstall Refract.`);
     const stampPath = path.join(this.home, '.refract-source');
     const stamp = `${src}|${fs.statSync(path.join(src, 'main.py')).mtimeMs}|${this.version()}`;
     const ready = KEY_FILES.every(k => fs.existsSync(path.join(this.home, ...k.split('/'))));
-    if (ready && readText(stampPath) === stamp) return this.home;
-    const all = listTree(src).filter(rel => !/^(NeuralScreen\.log|recordings\/|screenshots\/|\.extracted$)/i.test(rel));
-    let n = 0;
-    for (const rel of all) {
-      const from = path.join(src, ...rel.split('/'));
-      const to = path.join(this.home, ...rel.split('/'));
-      if (++n % 100 === 0 && onProgress) onProgress(n / all.length);
-      if (rel === 'config.json' && fs.existsSync(to)) continue; // the user's settings
-      await fs.promises.mkdir(path.dirname(to), { recursive: true });
-      if (rel === 'native/nvngx_dlssnr.dll') { linkOrCopy(from, to); continue; }
-      await fs.promises.copyFile(from, to);
+    if (!(ready && readText(stampPath) === stamp)) {
+      const all = listTree(src).filter(rel => !/^(NeuralScreen\.log|recordings\/|screenshots\/|\.extracted$)/i.test(rel));
+      let n = 0;
+      for (const rel of all) {
+        const from = path.join(src, ...rel.split('/'));
+        const to = path.join(this.home, ...rel.split('/'));
+        if (++n % 100 === 0 && onProgress) onProgress(n / all.length);
+        if (rel === 'config.json' && fs.existsSync(to)) continue; // the user's settings
+        await fs.promises.mkdir(path.dirname(to), { recursive: true });
+        if (rel === RUNTIME_REL) { linkOrCopy(from, to); continue; }
+        await fs.promises.copyFile(from, to);
+      }
+      fs.writeFileSync(stampPath, stamp);
     }
-    fs.writeFileSync(stampPath, stamp);
+    await this.ensureRuntime(onProgress);
     return this.home;
+  }
+
+  // The 158 MB runtime, in place under the working copy. Bundled builds link it out of the
+  // payload; the public build downloads it once (hash-checked) into the app's cache and links
+  // that. Either way it lands at <home>/native/nvngx_dlssnr.dll, which is what the worker loads.
+  async ensureRuntime(onProgress) {
+    const to = path.join(this.home, ...RUNTIME_REL.split('/'));
+    if (fs.existsSync(to) && fs.statSync(to).size > 0) return to;
+    let from = bundle.file(PREFIX + RUNTIME_REL);
+    if (!from) {
+      if (!this.cacheRoot) throw new Error('The neural-rendering runtime is not available and there is nowhere to download it to.');
+      const assets = require('./dlss5assets');
+      from = await assets.ensureUniversalRuntime(this.cacheRoot, p => {
+        this.emit('neuralscreen', { state: 'downloading', label: 'Neural-rendering runtime', frac: p && p.frac });
+        if (onProgress && p && typeof p.frac === 'number') onProgress(p.frac);
+      });
+    }
+    if (!from) throw new Error('Could not obtain the neural-rendering runtime (nvngx_dlssnr.dll).');
+    await fs.promises.mkdir(path.dirname(to), { recursive: true });
+    linkOrCopy(from, to);
+    return to;
   }
 
   configPath() { return path.join(this.home, 'config.json'); }
@@ -200,4 +230,4 @@ function linkOrCopy(from, to) {
   } catch { fs.copyFileSync(from, to); }
 }
 
-module.exports = { NeuralScreen, PROFILES, DEFAULTS, HOTKEYS, KEY_FILES };
+module.exports = { NeuralScreen, ENGINE_FILES, RUNTIME_REL, PROFILES, DEFAULTS, HOTKEYS, KEY_FILES };
