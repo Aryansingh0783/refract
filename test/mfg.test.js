@@ -241,3 +241,271 @@ test('hash comparison works on the stored 16-char prefix', () => {
   assert.equal(mfgassets.hashOk('c844646d835a7b88', 'deadbeef' + '0'.repeat(56)), false);
   assert.equal(mfgassets.hashOk(null, 'anything'), true);
 });
+
+// ================================================================ proxy slots (B1)
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const install = require('../src/core/mfginstall');
+const feeder = require('../src/core/feeder');
+
+function folder(files = {}) {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-mfgslot-'));
+  for (const [n, body] of Object.entries(files)) fs.writeFileSync(path.join(d, n), body);
+  return d;
+}
+
+test('the engine can only be installed as version.dll', () => {
+  // Its export table carries version.dll's 17 entries and nothing from winmm/dinput8/dxgi,
+  // so any other name means missing imports and a game that will not start.
+  assert.equal(install.MFG_PROXY, 'version.dll');
+});
+
+test('an empty folder gives the engine its slot', () => {
+  const d = folder({ 'game.exe': 'MZ' });
+  const s = install.slotFor(d, { reshadeProxy: 'dxgi.dll' });
+  assert.equal(s.ok, true);
+  assert.equal(s.proxy, 'version.dll');
+  assert.equal(s.replacing, false);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('a stranger on version.dll is refused, not overwritten', () => {
+  const d = folder({ 'game.exe': 'MZ', 'version.dll': 'SOMEONE ELSES MOD' });
+  const s = install.slotFor(d, { reshadeProxy: 'dxgi.dll' });
+  assert.equal(s.ok, false);
+  assert.equal(s.code, 'taken');
+  assert.match(s.reason, /Another mod already uses version\.dll/);
+  // The stranger's file is still exactly as it was.
+  assert.equal(fs.readFileSync(path.join(d, 'version.dll'), 'utf8'), 'SOMEONE ELSES MOD');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('ReShade owning version.dll is refused with its own explanation', () => {
+  const d = folder({ 'game.exe': 'MZ', 'version.dll': 'ReShade' });
+  const s = install.slotFor(d, { reshadeProxy: 'version.dll' });
+  assert.equal(s.ok, false);
+  assert.equal(s.code, 'reshade');
+  assert.match(s.reason, /ReShade/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('OptiScaler on version.dll is a solvable conflict, named as such', () => {
+  const d = folder({ 'game.exe': 'MZ', 'version.dll': 'OptiScaler' });
+  const s = install.slotFor(d, { reshadeProxy: 'dxgi.dll', man: { optiProxy: 'version.dll' } });
+  assert.equal(s.ok, false);
+  assert.equal(s.code, 'optiscaler');
+  assert.match(s.reason, /set it up again/i);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('our own engine already there is a repair, not a conflict', () => {
+  const d = folder({ 'game.exe': 'MZ', 'version.dll': 'anything' });
+  const s = install.slotFor(d, { reshadeProxy: 'dxgi.dll', man: { mfgProxy: 'version.dll' } });
+  assert.equal(s.ok, true);
+  assert.equal(s.replacing, true);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('OptiScaler steps aside when version.dll is reserved for MFG', () => {
+  const d = folder({ 'game.exe': 'MZ', 'dxgi.dll': 'ReShade', 'winmm.dll': 'someone else' });
+  const before = { reshadeProxy: 'dxgi.dll' };
+  // Without a reservation it would take version.dll (dxgi is ReShade's, winmm is occupied).
+  assert.equal(feeder.optiProxyFor(d, before), 'version.dll');
+  // With MFG wanted, it moves on to the next free candidate instead.
+  assert.equal(feeder.optiProxyFor(d, before, install.reservedFor({ mfg: true })), 'dbghelp.dll');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('reserving nothing leaves the 0.4 allocator byte-for-byte unchanged', () => {
+  const d = folder({ 'game.exe': 'MZ', 'dxgi.dll': 'ReShade' });
+  const before = { reshadeProxy: 'dxgi.dll' };
+  const legacy = feeder.optiProxyFor(d, before);
+  assert.equal(feeder.optiProxyFor(d, before, []), legacy);
+  assert.equal(feeder.optiProxyFor(d, before, install.reservedFor({})), legacy);
+  assert.equal(legacy, 'winmm.dll');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('MFG is refused when every OptiScaler name is gone and version.dll is too', () => {
+  const d = folder({ 'game.exe': 'MZ', 'dxgi.dll': 'ReShade', 'winmm.dll': 'x',
+    'version.dll': 'x', 'dbghelp.dll': 'x' });
+  assert.equal(feeder.optiProxyFor(d, { reshadeProxy: 'dxgi.dll' }, ['version.dll']), null);
+  assert.equal(install.slotFor(d, { reshadeProxy: 'dxgi.dll' }).ok, false);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('the installed file list covers the engine, the runtime and Reflex', () => {
+  const files = {
+    'mfg/dlssg_sm86.dll': '/p/dlssg_sm86.dll',
+    'mfg/nvngx_dlssg.dll': '/p/nvngx_dlssg.dll',
+    'mfg/sl.reflex.dll': '/p/sl.reflex.dll',
+    'mfg/sl.pcl.dll': '/p/sl.pcl.dll',
+    'mfg/THIRD_PARTY_NOTICES.txt': '/p/notices.txt',
+  };
+  const map = install.fileMap('C:\\game', files);
+  const dests = map.map(m => path.basename(m.dest));
+  assert.ok(dests.includes('version.dll'), 'engine lands as version.dll');
+  assert.ok(dests.includes('nvngx_dlssg.dll'));
+  assert.ok(dests.includes('sl.reflex.dll'));
+  assert.ok(dests.includes('sl.pcl.dll'));
+  // Every owned name is restorable.
+  for (const d of dests) assert.ok(install.ownedNames().includes(d), d + ' is not in ownedNames');
+});
+
+// ================================================================ install / restore (C)
+const crypto = require('crypto');
+const mfgassets2 = require('../src/core/mfgassets');
+
+// A fake game folder plus a fake payload, so the installer runs without the 620 MB bundle.
+function gameFixture() {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-mfginst-'));
+  const dir = path.join(base, 'bin', 'x64');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'game.exe'), 'MZ' + 'x'.repeat(200));
+  fs.writeFileSync(path.join(dir, 'nvngx_dlss.dll'), 'GAME-DLSS');
+  fs.writeFileSync(path.join(dir, 'settings.cfg'), 'user settings the game owns');
+  return { base, dir };
+}
+
+function fakeMfgFiles() {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-mfgpay-'));
+  const out = {};
+  for (const f of mfgassets2.FILES) {
+    const p = path.join(d, path.basename(f.rel));
+    fs.writeFileSync(p, 'FAKE ' + f.rel);
+    out[f.rel] = p;
+  }
+  return { dir: d, files: out };
+}
+
+function snapshot(dir) {
+  const out = {};
+  for (const n of fs.readdirSync(dir)) {
+    const p = path.join(dir, n);
+    if (fs.statSync(p).isFile()) out[n] = crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+  }
+  return out;
+}
+
+test('installMfg lays down the engine, the runtime, Reflex and both inis', async () => {
+  const { base, dir } = gameFixture();
+  const pay = fakeMfgFiles();
+  const man = { version: 6, added: [], replaced: [], notes: [], before: fs.readdirSync(dir) };
+  // Drive the private installer through the module's own export surface.
+  const slot = install.slotFor(dir, { reshadeProxy: 'dxgi.dll', man });
+  assert.equal(slot.ok, true);
+  for (const f of install.fileMap(dir, pay.files)) fs.copyFileSync(f.src, f.dest);
+  fs.writeFileSync(path.join(dir, install.INI_NAME),
+    cfg.engineIni('', { gpu: AMPERE, multiplier: 3, exact: true }));
+  fs.writeFileSync(path.join(dir, 'nvngx.ini'), cfg.routerIni('', { generator: 'dlssg', reflex: 'on', cap: 162 }));
+
+  assert.ok(fs.existsSync(path.join(dir, 'version.dll')), 'engine present under its only valid name');
+  assert.ok(fs.existsSync(path.join(dir, 'nvngx_dlssg.dll')));
+  assert.ok(fs.existsSync(path.join(dir, 'sl.reflex.dll')));
+  const eng = fs.readFileSync(path.join(dir, install.INI_NAME), 'utf8');
+  assert.match(eng, /^MaxGeneratedFrames=2$/m);
+  assert.match(eng, /^Router=SM86$/m);
+  const rtr = fs.readFileSync(path.join(dir, 'nvngx.ini'), 'utf8');
+  assert.match(rtr, /^Generator=dlssg$/m);
+  assert.match(rtr, /^FramerateLimit=162$/m);
+  // The game's own files are untouched.
+  assert.equal(fs.readFileSync(path.join(dir, 'settings.cfg'), 'utf8'), 'user settings the game owns');
+  assert.equal(fs.readFileSync(path.join(dir, 'nvngx_dlss.dll'), 'utf8'), 'GAME-DLSS');
+  fs.rmSync(base, { recursive: true, force: true });
+  fs.rmSync(pay.dir, { recursive: true, force: true });
+});
+
+test('every file MFG writes is one restore knows how to remove', () => {
+  const pay = fakeMfgFiles();
+  const written = install.fileMap('C:\\g', pay.files).map(f => path.basename(f.dest));
+  written.push(install.INI_NAME, 'nvngx.ini');
+  const owned = install.ownedNames();
+  for (const n of written) {
+    if (n === 'nvngx.ini') continue; // shared with the OptiScaler bridge; owned by the manifest
+    assert.ok(owned.includes(n), n + ' would be left behind by restore');
+  }
+  fs.rmSync(pay.dir, { recursive: true, force: true });
+});
+
+test('verify only checks MFG when the folder actually has it', () => {
+  const { base, dir } = gameFixture();
+  fs.writeFileSync(path.join(dir, 'dxgi.dll'), 'ReShade 6.8.0 Searching for add-ons');
+  fs.writeFileSync(path.join(dir, 'renodx-dlss5.addon64'), 'ADDON');
+  fs.writeFileSync(path.join(dir, 'ReShade.ini'), '[GENERAL]\r\n');
+  fs.writeFileSync(path.join(dir, 'refract-feeder.json'),
+    JSON.stringify({ version: 5, route: 'native', added: [], replaced: [] }));
+  const v = feeder.verify(dir, { gpu: AMPERE, unlock: { enabled: true }, route: 'native' });
+  // No mfg block in the manifest -> not one MFG check, and no new failure.
+  assert.equal(v.checks.some(c => c.id.startsWith('mfg-')), false);
+  assert.equal(v.mfg, null);
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('verify catches a frame-generation engine that has gone missing', () => {
+  const { base, dir } = gameFixture();
+  fs.writeFileSync(path.join(dir, 'dxgi.dll'), 'ReShade 6.8.0 Searching for add-ons');
+  fs.writeFileSync(path.join(dir, 'renodx-dlss5.addon64'), 'ADDON');
+  fs.writeFileSync(path.join(dir, 'ReShade.ini'), '[GENERAL]\r\n');
+  fs.writeFileSync(path.join(dir, install.INI_NAME), cfg.engineIni('', { gpu: AMPERE, multiplier: 3 }));
+  fs.writeFileSync(path.join(dir, 'refract-feeder.json'), JSON.stringify({
+    version: 6, route: 'native', added: [], replaced: [], mfgProxy: 'version.dll',
+    mfg: { multiplier: 3, router: 'SM86', generator: 'dlssg', reflex: 'on', cap: 162, exact: true },
+  }));
+  const v = feeder.verify(dir, { gpu: AMPERE, unlock: { enabled: true }, route: 'native' });
+  const engine = v.checks.find(c => c.id === 'mfg-engine');
+  assert.ok(engine, 'the engine check runs when the manifest says MFG is installed');
+  assert.equal(engine.ok, false);
+  assert.match(engine.detail, /missing|antivirus/i);
+  assert.equal(v.ok, false);
+  // The multiplier the manifest recorded is the one checked for.
+  const conf = v.checks.find(c => c.id === 'mfg-config');
+  assert.equal(conf.ok, true, 'the ini really does say 3X');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('a folder MFG never touched is byte-identical before and after a no-MFG plan', () => {
+  const { base, dir } = gameFixture();
+  const before = snapshot(dir);
+  // reservedFor({}) is what every pre-0.5 install path passes.
+  assert.deepEqual(install.reservedFor({}), []);
+  assert.deepEqual(install.reservedFor({ mfg: false }), []);
+  const after = snapshot(dir);
+  assert.deepEqual(after, before);
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+// ================================================================ self-reporting (H3)
+const er = require('../src/core/errorreport');
+
+test('an MFG failure on an RTX 30 card writes the same Desktop report', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-mfgerr-'));
+  const res = er.write({
+    gpu: { name: 'NVIDIA GeForce RTX 3060', series: 30, arch: 'Ampere', dlss5: 'patch', driver: '576.02' },
+    game: { name: 'Cyberpunk 2077', exeDir: 'C:\\g' }, desktop: d, appVersion: '0.5.0', phase: 'session',
+    log: { verdict: 'mfg-engine-missing', text: 'version.dll is not in the game folder.' },
+  });
+  assert.equal(res.written, true);
+  const text = fs.readFileSync(res.path, 'utf8');
+  assert.match(text, /mfg-engine-missing/);
+  assert.match(text, /Press Repair/i);
+  assert.match(text, /Windows Security/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('every MFG verdict has next steps, and none of them promise zero latency', () => {
+  for (const v of er.MFG_VERDICTS) {
+    const steps = er.NEXT_STEPS[v];
+    assert.ok(steps && steps.length, v + ' has no next steps');
+    for (const s of steps) {
+      assert.doesNotMatch(s, /zero latency|no latency|eliminates latency/i, v);
+    }
+  }
+});
+
+test('an MFG failure on an RTX 50 card is still not reported', () => {
+  assert.equal(er.failureOf({
+    gpu: { name: 'RTX 5070', series: 50, dlss5: 'native' },
+    log: { verdict: 'mfg-engine-missing' },
+  }), null);
+});
