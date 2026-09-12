@@ -75,7 +75,10 @@ function scrubDisabled(doc) {
 // ReShade.ini for the native / bridge / feeder routes.
 //   fresh config  -> sensible defaults, Home opens the overlay, tutorial skipped, tuned NR
 //   existing one  -> only adds what is missing; the user's own [RenoDX.DLSS5] is kept as-is
-function dlss5ReShade(text, { feeder = false } = {}) {
+// EnableHooks: 2 hooks NGX only and leaves the game's Streamline modules alone — what an RTX 50
+// was verified on. 1 also patches Streamline, which is what 1-Click-DLSS5 ships by default and
+// what a Streamline game on Ampere/Ada may need before the add-on ever sees a DLSS call.
+function dlss5ReShade(text, { feeder = false, hooks = null } = {}) {
   const fresh = !String(text || '').trim();
   const doc = ini.parse(text || '');
   if (!ini.get(doc, 'GENERAL', 'PresetPath')) ini.set(doc, 'GENERAL', 'PresetPath', '.\\ReShadePreset.ini');
@@ -92,12 +95,15 @@ function dlss5ReShade(text, { feeder = false } = {}) {
   } else if (feeder && ini.get(doc, NR_SECTION, 'NREnableUpscaling') == null) {
     ini.set(doc, NR_SECTION, 'NREnableUpscaling', '0');
   }
+  // The hook mode is Refract's to set even in a config the user already tuned: it decides
+  // whether the add-on can see this game's DLSS at all.
+  if (hooks === 1 || hooks === 2) ini.set(doc, NR_SECTION, 'EnableHooks', String(hooks));
   return ini.stringify(doc);
 }
 
 // Feeder route: shader search paths + the motion-vector provider definition.
-function feederReShade(text) {
-  const doc = ini.parse(dlss5ReShade(text, { feeder: true }));
+function feederReShade(text, { hooks = null } = {}) {
+  const doc = ini.parse(dlss5ReShade(text, { feeder: true, hooks }));
   addSearchPath(doc, 'EffectSearchPaths', '.\\reshade-shaders\\Shaders\\**');
   addSearchPath(doc, 'TextureSearchPaths', '.\\reshade-shaders\\Textures\\**');
   if (!ini.get(doc, 'GENERAL', 'PresetPath')) ini.set(doc, 'GENERAL', 'PresetPath', '.\\ReShadePreset.ini');
@@ -129,4 +135,31 @@ function feed(text) {
   return ini.stringify(doc);
 }
 
-module.exports = { gameReShade, dlss5ReShade, feederReShade, feederPreset, feed, MV_PROVIDER, FEED_TECHNIQUES, NR_TUNED, NR_SECTION };
+// OptiScaler's config for the bridge route. The upstream ini is 47 kB of defaults; only these
+// keys matter here, and they are the ones 1-Click-DLSS5 ships: force DLSS as the DX12 upscaler so
+// the game's FSR/XeSS calls become DLSS calls, hook every upscaler input, leave OptiScaler's own
+// overlay off (ReShade's Home overlay owns the UI), and keep logging out of the frame time.
+const OPTI_SECTIONS = {
+  Upscalers: { Dx12Upscaler: 'dlss', Dx11Upscaler: 'auto', VulkanUpscaler: 'auto' },
+  FrameGen: { Enabled: 'auto' },
+  Inputs: { EnableDlssInputs: 'true', EnableXeSSInputs: 'true', EnableFsr2Inputs: 'true', EnableFsr3Inputs: 'true',
+    EnableFfxInputs: 'true', UseFsr2Inputs: 'true', UseFsr3Inputs: 'true', UseFfxInputs: 'true' },
+  DLSS: { Enabled: 'true', RenderPresetOverride: 'false' },
+  Hooks: { HookD3D12: 'true', HookSL: 'true' },
+  Menu: { OverlayMenu: 'false', DisableSplash: 'true' },
+  Log: { LogLevel: '0', LogToFile: 'false' },
+};
+
+function optiScalerIni() {
+  const out = ['; Written by Refract for the DLSS 5 bridge route.',
+    '; The game\'s FSR 2/3 or XeSS calls are routed to DLSS so neural rendering has something to',
+    '; hang off. Delete this file and the DLLs beside it, or use Restore original, to undo.', ''];
+  for (const [section, keys] of Object.entries(OPTI_SECTIONS)) {
+    out.push(`[${section}]`);
+    for (const [k, v] of Object.entries(keys)) out.push(`${k}=${v}`);
+    out.push('');
+  }
+  return out.join('\r\n');
+}
+
+module.exports = { gameReShade, dlss5ReShade, feederReShade, feederPreset, feed, optiScalerIni, MV_PROVIDER, FEED_TECHNIQUES, NR_TUNED, NR_SECTION, OPTI_SECTIONS };

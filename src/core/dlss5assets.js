@@ -45,6 +45,18 @@ const SOURCES = {
       'sl.dlss_nr.dll': '9f6672e5e0170dc118a3188d21bda187e1fc1aa3502895b21ab846d23165c11d',   // Streamline 2.13
     },
   },
+  // OptiScaler: the bridge that turns a game's FSR 2/3 or XeSS calls into DLSS calls, so a game
+  // that never shipped DLSS can still be given DLSS 5 neural rendering. This is 1-Click-DLSS5's
+  // "Mode 2", taken from OptiScaler's own release rather than their repack.
+  optiscaler: {
+    url: 'https://github.com/optiscaler/OptiScaler/releases/download/v0.9.4/Optiscaler_0.9.4-final.20260718._MM.7z',
+    name: 'Optiscaler_0.9.4.7z', kind: 'zip', version: '0.9.4',
+    sha256: '575cb4df866116093df75af607e37fd70e10f5163e0f23fd5c804142e80ef0ad',
+    inner: {
+      'OptiScaler.dll': 'fbfb6676b829dad7e020fb830586a16aa0ec6add78016db48ef12e2ae1803231',
+      'libxess.dll': '251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7',
+    },
+  },
   // The neural-rendering runtime every DLSS 5 route needs (nvngx_dlssnr.dll), taken from the
   // NeuralScreen release, which Refract also bundles whole as its screen-space engine.
   // NVIDIA's 310.8.0 build with sm_75/86/89/120 kernels and an architecture gate that accepts
@@ -168,8 +180,9 @@ async function ensurePayload(cacheRoot, { bitness = 64, route = 'native' } = {},
   const rt = require('./reshaderuntime');
   const needs = ['reshade', 'dlss-sr', 'dlssnr'];
   if (route === 'native' || route === 'native+bridge') needs.push('renodx5');
+  if (route === 'optiscaler') needs.push('optiscaler');
   if (route === 'native+bridge') needs.push('bridge');
-  if (route === 'feeder') needs.push('feeder', 'lumenite', 'headers', 'streamline');
+  if (route === 'feeder') needs.push('renodx5', 'feeder', 'lumenite', 'headers', 'streamline');
   const of = needs.length;
   let n = 0;
   const step = (label, frac) => onProgress && onProgress({ phase: n, of, label, frac });
@@ -194,6 +207,12 @@ async function ensurePayload(cacheRoot, { bitness = 64, route = 'native' } = {},
       || findFile(await ensureUnpacked(cacheRoot, 'renodx5', f => step('RenoDX DLSS 5 add-on', f)), /^renodx-dlss5\.addon64$/i);
     out.addonName = 'renodx-dlss5.addon64';
     out.versions.renodx5 = SOURCES.renodx5.version;
+  }
+  if (needs.includes('optiscaler')) {
+    n++; step('OptiScaler bridge');
+    const o = await ensureOptiScaler(cacheRoot, f => step('OptiScaler bridge', f && f.frac));
+    out.optiScaler = o.dll; out.optiXess = o.xess;
+    out.versions.optiscaler = o.version;
   }
   if (needs.includes('bridge')) {
     n++; step('DX11 DLSS bridge');
@@ -238,6 +257,10 @@ async function ensurePayload(cacheRoot, { bitness = 64, route = 'native' } = {},
       .filter(p => !/^nvngx_dlssnr\.dll$/i.test(path.basename(p))); // universal NR is provisioned separately
   }
 
+  if (route === 'optiscaler') {
+    out.ok = !!(out.optiScaler && out.optiXess && out.nvngxNrUniversal);
+    return out;
+  }
   out.ok = !!out.reshadeDll && !!out.nvngxNrUniversal && (route === 'feeder'
     ? !!(out.feedAddon && out.feedFx && out.lumeniteShaders && out.lumeniteShaders.length && out.dlls.length && out.shaderHeaders)
     : !!out.addon && (route !== 'native+bridge' || !!out.bridge));
@@ -289,9 +312,30 @@ async function ensureDlssRuntimes(cacheRoot, onProgress) {
   return out;
 }
 
+const OPTI_DLL_REL = 'optiscaler/OptiScaler.dll';
+const OPTI_XESS_REL = 'optiscaler/libxess.dll';
+
+// OptiScaler's runtime pair (the bridge itself and Intel's XeSS runtime it translates through).
+async function ensureOptiScaler(cacheRoot, onProgress) {
+  const out = { dll: bundle.file(OPTI_DLL_REL), xess: bundle.file(OPTI_XESS_REL), version: SOURCES.optiscaler.version };
+  if (out.dll && out.xess) return out;
+  const a = SOURCES.optiscaler;
+  const step = (label, frac) => onProgress && onProgress({ phase: 1, of: 1, label, frac });
+  step('OptiScaler bridge');
+  const dir = await ensureUnpacked(cacheRoot, 'optiscaler', f => step('OptiScaler bridge', f));
+  for (const [name, want] of Object.entries(a.inner)) {
+    const p = walkFiles(dir).find(f => path.basename(f).toLowerCase() === name.toLowerCase());
+    if (!p) throw new Error(`The OptiScaler package did not contain ${name}.`);
+    const got = digest(fs.readFileSync(p));
+    if (got !== want) throw new Error(`${name} checksum mismatch (expected ${want}, got ${got}).`);
+    if (name === 'OptiScaler.dll') out.dll = p; else out.xess = p;
+  }
+  return out;
+}
+
 const UNIVERSAL_NR_SHA256 = SOURCES.neuralscreen.innerSha256;
 // Refract 0.2 shipped 1-Click-DLSS5's build: sm_89/sm_120 kernels only and an architecture gate
 // that refuses Ampere ("Unsupported GPU architecture 0x170"). Fine on RTX 40/50, useless on RTX 30.
 const LEGACY_NR_SHA256 = '4b8d19bc3eff58a084f5eca7489c921501c203450169fb82ff4f649a4482ba05';
 
-module.exports = { ensurePayload, ensureStreamline, ensureFile, ensureUnpacked, ensureUniversalRuntime, ensurePatchedRuntime: ensureUniversalRuntime, ensureDlssRuntimes, ensureShaderHeaders, listFiles, findFile, walkFiles, SOURCES, SHADER_HEADERS, NR_REL, SR_REL, SL_NR_REL, SR_VERSION, UNIVERSAL_NR_SHA256, LEGACY_NR_SHA256 };
+module.exports = { ensurePayload, ensureStreamline, ensureFile, ensureUnpacked, ensureUniversalRuntime, ensurePatchedRuntime: ensureUniversalRuntime, ensureDlssRuntimes, ensureOptiScaler, ensureShaderHeaders, listFiles, findFile, walkFiles, SOURCES, SHADER_HEADERS, NR_REL, SR_REL, SL_NR_REL, SR_VERSION, OPTI_DLL_REL, OPTI_XESS_REL, UNIVERSAL_NR_SHA256, LEGACY_NR_SHA256 };

@@ -36,6 +36,9 @@ const ANY_ADDON = /\.addon(64|32)?$/i;
 // Add-ons that all try to drive DLSS. More than one at once is the documented conflict
 // behind "it's listed but does nothing": they fight over the same NGX hooks.
 const DLSS_ADDON = /(dlss|ngx)/i;
+// What the game already has to upscale with. OptiScaler can turn any of these into DLSS calls.
+const FSR_FILE = /(^|[^a-z])fsr[23]|amd_fidelityfx|ffx_fsr/i;
+const XESS_FILE = /^libxess(_dx11|_fg)?\.dll$/i;
 const RESHADE_PROXIES = ['dxgi.dll', 'd3d12.dll', 'd3d11.dll', 'd3d10.dll', 'd3d9.dll', 'd3d8.dll', 'ddraw.dll', 'opengl32.dll', 'dinput8.dll'];
 
 function listDir(dir) { try { return fs.readdirSync(dir); } catch { return []; } }
@@ -118,11 +121,17 @@ function verify(exeDir, { gpu = null, unlock = null, route = null } = {}) {
   const r = route || st.route || null;
   const checks = [];
   const add = (id, label, ok, detail) => checks.push({ id, label, ok: !!ok, detail: detail || null });
-  add('reshade', 'ReShade add-on build next to the game',
-    i.reshadeProxy && i.reshadeIsAddonBuild,
-    !i.reshadeProxy ? 'No ReShade proxy DLL in this folder.' : i.reshadeIsAddonBuild ? i.reshadeProxy : `${i.reshadeProxy} is a ReShade build without add-on support.`);
-  if (r === 'feeder') add('addon', 'DLSS 5 Feeder add-on', i.feedAddons.length, i.feedAddons.join(', ') || 'dlss5-feed.addon64 is missing.');
-  else add('addon', 'RenoDX DLSS 5 add-on', i.renodxAddons.length, i.renodxAddons.join(', ') || 'renodx-dlss5.addon64 is missing.');
+  if (r === 'optiscaler') {
+    const proxy = optiProxyInstalled(exeDir, readManifest(exeDir));
+    add('optiscaler', 'OptiScaler bridge next to the game', !!proxy, proxy ? `loaded as ${proxy}` : 'No OptiScaler proxy DLL in this folder.');
+    add('xess', 'XeSS runtime for the bridge', fs.existsSync(path.join(exeDir, 'libxess.dll')), 'libxess.dll');
+  } else {
+    add('reshade', 'ReShade add-on build next to the game',
+      i.reshadeProxy && i.reshadeIsAddonBuild,
+      !i.reshadeProxy ? 'No ReShade proxy DLL in this folder.' : i.reshadeIsAddonBuild ? i.reshadeProxy : `${i.reshadeProxy} is a ReShade build without add-on support.`);
+    if (r === 'feeder') add('addon', 'DLSS 5 Feeder add-on', i.feedAddons.length, i.feedAddons.join(', ') || 'dlss5-feed.addon64 is missing.');
+    else add('addon', 'RenoDX DLSS 5 add-on', i.renodxAddons.length, i.renodxAddons.join(', ') || 'renodx-dlss5.addon64 is missing.');
+  }
   if (r === 'native+bridge') add('bridge', 'DX11 → DX12 bridge add-on', i.bridgeAddons.length, i.bridgeAddons.join(', ') || 'dlss5-bridge.addon64 is missing.');
   const nr = nrState(exeDir, { gpu, unlock });
   // Installed by Refract, and now gone: something removed it after the install. On Windows that
@@ -131,8 +140,12 @@ function verify(exeDir, { gpu = null, unlock = null, route = null } = {}) {
   const vanished = weAdded && !nr.present;
   add('runtime', 'Neural-rendering runtime (nvngx_dlssnr.dll)', nr.ok,
     vanished ? 'Refract installed it and it is gone. An antivirus most likely quarantined it — exclude the game folder, then repair.' : nr.detail);
-  const ini = iniState(exeDir);
-  add('config', 'ReShade.ini lets the add-on load', ini.ok, ini.detail);
+  if (r === 'optiscaler') {
+    add('config', 'OptiScaler.ini routes FSR/XeSS to DLSS', /Dx12Upscaler\s*=\s*dlss/i.test(readText(path.join(exeDir, 'OptiScaler.ini'))), 'OptiScaler.ini');
+  } else {
+    const ini = iniState(exeDir);
+    add('config', 'ReShade.ini lets the add-on load', ini.ok, ini.detail);
+  }
   add('conflicts', 'Only one DLSS add-on in this folder', !i.conflicts.length,
     i.conflicts.length ? `${i.conflicts.join(', ')} fight over the same NGX hooks.` : null);
   const failed = checks.filter(c => !c.ok);
@@ -154,14 +167,27 @@ function inspect(exeDir) {
     bridgeAddons: names.filter(n => BRIDGE_ADDON.test(n)),
     addons: names.filter(n => ANY_ADDON.test(n)),
     dlssAddons,
-    conflicts: dlssAddons.length > 1 ? dlssAddons : [],
+    // Two add-ons driving the same NGX hooks unload each other — the classic "it's listed but
+    // does nothing". The feeder pairing (dlss5-feed + renodx-dlss5) is intended, though, and so
+    // is the DX11 bridge alongside RenoDX; only duplicates and strangers count.
+    conflicts: (() => {
+      const renodx = names.filter(n => RENODX_ADDON.test(n));
+      const feed = names.filter(n => FEED_ADDON.test(n));
+      const known = n => RENODX_ADDON.test(n) || FEED_ADDON.test(n) || BRIDGE_ADDON.test(n);
+      const strangers = dlssAddons.filter(n => !known(n));
+      const bad = [...(renodx.length > 1 ? renodx : []), ...(feed.length > 1 ? feed : []), ...strangers];
+      return [...new Set(bad)];
+    })(),
     reshadeProxy: proxy || null,
     reshadeIsAddonBuild: proxy ? rt.isAddonReShade(path.join(exeDir, proxy)) : false,
+    fsr: names.filter(n => /\.dll$/i.test(n) && FSR_FILE.test(n)),
+    xess: names.filter(n => XESS_FILE.test(n)),
+    optiScaler: names.filter(n => /^optiscaler\.(dll|ini)$/i.test(n)),
   };
 }
 
 // Which DLSS 5 route fits this game?
-function routeFor({ api = 'dxgi', dx = null, hasDlss = false } = {}) {
+function routeFor({ api = 'dxgi', dx = null, hasDlss = false, hasFsr = false, hasXess = false } = {}) {
   if (api === 'vulkan') {
     return { route: null, reason: 'This is a Vulkan game. ReShade hooks Vulkan through an installed layer rather than a proxy DLL, and the DLSS 5 add-ons are Direct3D only.' };
   }
@@ -169,6 +195,9 @@ function routeFor({ api = 'dxgi', dx = null, hasDlss = false } = {}) {
     return { route: null, reason: `This is a ${api} game. DLSS 5 needs DirectX 11 or 12.` };
   }
   if (hasDlss) return { route: dx === 11 ? 'native+bridge' : 'native' };
+  // No DLSS, but the game upscales with FSR or XeSS: OptiScaler turns those calls into DLSS
+  // calls, which is what the neural pass needs (1-Click-DLSS5 calls this mode 2).
+  if (hasFsr || hasXess) return { route: 'optiscaler' };
   return { route: 'feeder' };
 }
 
@@ -176,6 +205,7 @@ const ROUTE_LABEL = {
   native: 'DLSS 5 neural rendering over this game\'s own DLSS',
   'native+bridge': 'DLSS 5 over this DX11 game\'s DLSS, via the D3D11→D3D12 bridge',
   feeder: 'DLSS 5 Feeder — this game has no DLSS, so motion vectors are generated for it',
+  optiscaler: 'OptiScaler bridge — this game\'s FSR/XeSS upscaling is routed to DLSS 5',
 };
 
 function plan(exeDir, opts = {}) {
@@ -196,13 +226,17 @@ function plan(exeDir, opts = {}) {
   }
   if (bitness !== 64) return { ok: false, route: null, actions: [], warnings, inspect: i, reason: 'DLSS 5 is 64-bit only; this game is 32-bit.' };
 
-  const r = routeFor({ api, dx, hasDlss: i.hasDlss });
+  const r = routeFor({ api, dx, hasDlss: i.hasDlss, hasFsr: i.fsr.length > 0, hasXess: i.xess.length > 0 });
   if (!r.route) return { ok: false, route: null, actions: [], warnings, inspect: i, reason: r.reason };
 
   const actions = [];
-  if (!i.reshadeProxy) actions.push('reshade-install');
-  else if (!i.reshadeIsAddonBuild) actions.push('reshade-upgrade');
-  if (r.route === 'feeder') {
+  if (r.route !== 'optiscaler') {
+    if (!i.reshadeProxy) actions.push('reshade-install');
+    else if (!i.reshadeIsAddonBuild) actions.push('reshade-upgrade');
+  }
+  if (r.route === 'optiscaler') {
+    if (!i.optiScaler.length) actions.push('optiscaler-install');
+  } else if (r.route === 'feeder') {
     if (!i.feedAddons.length) actions.push('feeder-install');
   } else {
     if (!i.renodxAddons.length) actions.push('addon-install');
@@ -283,7 +317,7 @@ async function writeInto(man, dest, text, kind) {
 }
 async function read(p) { try { return await fs.promises.readFile(p, 'utf8'); } catch { return ''; } }
 
-async function install(game, payload, { cacheRoot, onProgress, gpu = null, unlock = null, upgradeSr = true } = {}) {
+async function install(game, payload, { cacheRoot, onProgress, gpu = null, unlock = null, upgradeSr = true, hooks = null } = {}) {
   const exeDir = path.dirname(game.exe);
   const api = game.api || 'dxgi';
   const bitness = game.bitness || 64;
@@ -291,6 +325,7 @@ async function install(game, payload, { cacheRoot, onProgress, gpu = null, unloc
 
   const gate = plan(exeDir, { bitness, api, dx, gpu, unlock });
   if (!gate.ok) throw new Error(gate.reason);
+  hooks = hooks === 1 || hooks === 2 ? hooks : hooksFor(gpu);
   const before = gate.inspect;
   const route = gate.route;
 
@@ -308,8 +343,18 @@ async function install(game, payload, { cacheRoot, onProgress, gpu = null, unloc
       // the add-ons create at runtime (logs, a generated preset) when Refract installed ReShade.
       before: listDir(exeDir) };
   }
-  Object.assign(man, { version: 5, route, at: Date.now(), notes: [] });
+  Object.assign(man, { version: 5, route, at: Date.now(), notes: [], hooks: hooks || hooksFor(gpu) });
   man.added = man.added || []; man.replaced = man.replaced || [];
+
+  // The bridge route replaces the upscaler instead of adding a ReShade pass, so it takes the
+  // proxy slot itself and skips everything ReShade-shaped.
+  if (route === 'optiscaler') {
+    await installOptiScaler(man, exeDir, payload, before);
+    await provisionNr(man, exeDir, payload, { gpu, unlock, cacheRoot, onProgress });
+    await fs.promises.writeFile(path.join(exeDir, MANIFEST), JSON.stringify(man, null, 2));
+    const checkedBridge = verify(exeDir, { gpu, unlock, route });
+    return { ...status(exeDir), route, label: ROUTE_LABEL[route], notes: man.notes, verify: checkedBridge, ok: checkedBridge.ok };
+  }
 
   // 1. ReShade with FULL add-on support (a limited build silently refuses to load add-ons).
   if (gate.actions.includes('reshade-install')) {
@@ -323,7 +368,7 @@ async function install(game, payload, { cacheRoot, onProgress, gpu = null, unloc
   }
 
   if (route === 'feeder') {
-    await installFeeder(man, exeDir, payload, before);
+    await installFeeder(man, exeDir, payload, before, hooks);
   } else {
     if (gate.actions.includes('addon-install')) {
       await copyInto(man, payload.addon, path.join(exeDir, payload.addonName), 'addon');
@@ -337,10 +382,10 @@ async function install(game, payload, { cacheRoot, onProgress, gpu = null, unloc
     }
     // The game's own DLSS/Streamline set is what the add-on hooks — never touch it.
     man.notes.push(`Left the game's own DLSS/Streamline runtime untouched (${before.dlssRuntime.length} files).`);
-    await writeIni(man, exeDir, { feeder: false });
+    await writeIni(man, exeDir, { feeder: false, hooks });
   }
 
-  if (route !== 'feeder') await provisionDlssSr(man, exeDir, payload, { upgradeSr, onProgress });
+  if (route !== 'feeder' && route !== 'optiscaler') await provisionDlssSr(man, exeDir, payload, { upgradeSr, onProgress });
   await provisionNr(man, exeDir, payload, { gpu, unlock, cacheRoot, onProgress });
 
   await fs.promises.writeFile(path.join(exeDir, MANIFEST), JSON.stringify(man, null, 2));
@@ -377,6 +422,14 @@ async function provisionNr(man, exeDir, payload, { gpu, unlock, cacheRoot, onPro
   }
   const src = own || payload.nvngxNrUniversal || await assets.ensureUniversalRuntime(cacheRoot, onProgress);
   await copyVerified(man, src, dest, 'runtime-nr', onProgress, 'Neural-rendering runtime');
+  // The bridge looks for the runtime under NGX's own name pattern as well (1-Click does the
+  // same); a hard link keeps it to one 158 MB file where the filesystem allows.
+  if (man.route === 'optiscaler') {
+    const alias = path.join(exeDir, 'nvngx.dll_dlssnr.dll');
+    await track(man, alias, 'runtime-nr');
+    try { await fs.promises.rm(alias, { force: true }); await fs.promises.link(dest, alias); }
+    catch { await fs.promises.copyFile(dest, alias); }
+  }
   man.notes.push(`Installed the ${own ? 'your' : 'universal'} neural-rendering runtime (nvngx_dlssnr.dll) for ${label}.`);
 }
 
@@ -412,11 +465,110 @@ async function provisionDlssSr(man, exeDir, payload, { upgradeSr = true, onProgr
   man.notes.push(`Upgraded the game's DLSS runtime ${d.theirs} → ${ourVersion} (original backed up).`);
 }
 
+// The feeder route: the game has no upscaler at all, so DLSS5-Feeder builds a synthetic DLAA
+// device and LumeniteFX supplies motion vectors through ReShade. Everything goes next to the exe
+// or into reshade-shaders/, and nothing the game already ships is overwritten.
+async function installFeeder(man, exeDir, payload, before, hooks) {
+  const shaders = path.join(exeDir, 'reshade-shaders', 'Shaders');
+  const textures = path.join(exeDir, 'reshade-shaders', 'Textures');
+
+  await copyInto(man, payload.feedAddon, path.join(exeDir, payload.feedAddonName), 'feeder');
+  man.notes.push(`Added ${payload.feedAddonName} (DLSS5-Feeder ${payload.versions.feeder}).`);
+  if (payload.addon && !before.renodxAddons.length) {
+    await copyInto(man, payload.addon, path.join(exeDir, payload.addonName), 'addon');
+    man.notes.push(`Added ${payload.addonName} (RenoDX DLSS 5 ${payload.versions.renodx5}).`);
+  }
+
+  await copyInto(man, payload.feedFx, path.join(shaders, 'DLSS5_Feed.fx'), 'feeder');
+  for (const f of payload.lumeniteShaders || []) await copyInto(man, f, path.join(shaders, path.basename(f)), 'feeder');
+  for (const f of payload.lumeniteIncludes || []) await copyInto(man, f, path.join(shaders, 'include', path.basename(f)), 'feeder');
+  for (const f of payload.lumeniteTextures || []) await copyInto(man, f, path.join(textures, path.basename(f)), 'feeder');
+  // ReShade's own headers: only where the folder does not already have them.
+  for (const f of payload.shaderHeaders || []) {
+    const dest = path.join(shaders, path.basename(f));
+    if (!fs.existsSync(dest)) await copyInto(man, f, dest, 'feeder');
+  }
+  man.notes.push(`Installed the feeder shaders (LumeniteFX ${payload.versions.lumenite}) into reshade-shaders.`);
+
+  // NVIDIA's runtime set, but only the files the game does not already have: mixing a game's
+  // own Streamline DLLs with another version is what crashes games before ReShade even loads.
+  let added = 0;
+  for (const f of payload.dlls || []) {
+    const dest = path.join(exeDir, path.basename(f));
+    if (fs.existsSync(dest)) continue;
+    await copyInto(man, f, dest, 'runtime');
+    added++;
+  }
+  if (payload.nvngxDlssSr && !fs.existsSync(path.join(exeDir, 'nvngx_dlss.dll'))) {
+    await copyVerified(man, payload.nvngxDlssSr, path.join(exeDir, 'nvngx_dlss.dll'), 'runtime', null, 'DLSS runtime');
+    added++;
+  }
+  man.notes.push(added ? `Added ${added} NVIDIA runtime files the game did not have.` : 'The game already had every runtime file it needs.');
+
+  await writeInto(man, path.join(exeDir, 'dlss5-feed.cfg'), cfg.feed(await read(path.join(exeDir, 'dlss5-feed.cfg'))), 'config');
+  await writeIni(man, exeDir, { feeder: true, hooks });
+  const presetPath = path.join(exeDir, 'ReShadePreset.ini');
+  await writeInto(man, presetPath, cfg.feederPreset(await read(presetPath)), 'config');
+  man.notes.push('Wrote the feeder preset: the motion-vector shaders run before the neural pass.');
+}
+
+// Which hook mode suits this card by default. RTX 50 is verified on NGX-only hooks; on Ampere and
+// Ada the add-on has to reach the game's Streamline modules too, which is the mode 1-Click ships.
+function hooksFor(gpu) {
+  const tier = (gpu && gpu.dlss5) || 'unknown';
+  return tier === 'patch' ? 1 : 2;
+}
+
+// The OptiScaler bridge: the game's FSR 2/3 or XeSS calls are turned into DLSS calls, so the
+// neural runtime has real DLSS work to attach to. OptiScaler is loaded as the game's proxy DLL;
+// when ReShade already owns dxgi.dll it takes winmm.dll instead, so the two never fight.
+const OPTI_PROXIES = ['dxgi.dll', 'winmm.dll', 'version.dll', 'dbghelp.dll'];
+function optiProxyFor(exeDir, before) {
+  const taken = new Set(listDir(exeDir).map(n => n.toLowerCase()));
+  const reshade = (before.reshadeProxy || '').toLowerCase();
+  for (const name of OPTI_PROXIES) {
+    if (name === reshade) continue;           // never overwrite a working ReShade
+    if (!taken.has(name)) return name;
+  }
+  return null;
+}
+
+// Which file in this folder is OptiScaler? It is installed under a proxy name, so identity comes
+// from the manifest, or failing that from the DLL's own marker.
+function optiProxyInstalled(exeDir, man = {}) {
+  if (man.optiProxy && fs.existsSync(path.join(exeDir, man.optiProxy))) return man.optiProxy;
+  for (const name of OPTI_PROXIES) {
+    const p = path.join(exeDir, name);
+    if (!fs.existsSync(p)) continue;
+    try {
+      const fd = fs.openSync(p, 'r');
+      try {
+        const buf = Buffer.alloc(Math.min(4 << 20, fs.statSync(p).size));
+        fs.readSync(fd, buf, 0, buf.length, 0);
+        if (buf.includes(Buffer.from('OptiScaler'))) return name;
+      } finally { fs.closeSync(fd); }
+    } catch {}
+  }
+  return null;
+}
+
+async function installOptiScaler(man, exeDir, payload, before) {
+  const proxy = optiProxyFor(exeDir, before);
+  if (!proxy) throw new Error('Every DLL name OptiScaler can load under is already taken in this folder. Move the extra proxy DLLs out and try again.');
+  await copyVerified(man, payload.optiScaler, path.join(exeDir, proxy), 'optiscaler', null, 'OptiScaler');
+  man.notes.push(`Installed the OptiScaler bridge ${payload.versions.optiscaler} as ${proxy}.`);
+  await copyVerified(man, payload.optiXess, path.join(exeDir, 'libxess.dll'), 'runtime', null, 'XeSS runtime');
+  man.notes.push('Added libxess.dll (XeSS translation runtime).');
+  await writeInto(man, path.join(exeDir, 'OptiScaler.ini'), cfg.optiScalerIni(), 'config');
+  man.notes.push('Wrote OptiScaler.ini: the game\'s FSR/XeSS calls now go to DLSS.');
+  man.optiProxy = proxy;
+}
+
 // ReShade.ini: create a tuned one, or add only what is missing to the user's (backed up).
-async function writeIni(man, exeDir, { feeder }) {
+async function writeIni(man, exeDir, { feeder, hooks = null }) {
   const iniPath = path.join(exeDir, 'ReShade.ini');
   const cur = await read(iniPath);
-  const next = feeder ? cfg.feederReShade(cur) : cfg.dlss5ReShade(cur);
+  const next = feeder ? cfg.feederReShade(cur, { hooks }) : cfg.dlss5ReShade(cur, { hooks });
   if (fs.existsSync(iniPath) && next === cur) { man.notes.push('Kept the existing ReShade.ini.'); return; }
   await writeInto(man, iniPath, next, 'config');
   man.notes.push(fs.existsSync(iniPath + BAK) ? 'Added DLSS 5 settings to your ReShade.ini (original backed up).' : 'Wrote a tuned ReShade.ini.');
@@ -457,6 +609,8 @@ async function pruneEmpty(dir) {
   try { if ((await fs.promises.readdir(dir)).length === 0) await fs.promises.rmdir(dir); } catch {}
 }
 
+function readText(p) { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } }
+
 function readManifest(exeDir) {
   try { return JSON.parse(fs.readFileSync(path.join(exeDir, MANIFEST), 'utf8')); } catch { return {}; }
 }
@@ -468,4 +622,4 @@ function status(exeDir) {
   } catch { return { installed: false }; }
 }
 
-module.exports = { install, restore, status, verify, quickCheck, srDecision, eligible, plan, inspect, routeFor, nrNeeded, nrState, ROUTE_LABEL, MANIFEST, ensurePayload: assets.ensurePayload };
+module.exports = { install, restore, status, verify, quickCheck, srDecision, hooksFor, eligible, plan, inspect, routeFor, nrNeeded, nrState, ROUTE_LABEL, MANIFEST, ensurePayload: assets.ensurePayload };
