@@ -601,3 +601,26 @@ test('the button never promises latency the engine cannot deliver', () => {
   assert.doesNotMatch(html, /zero latency|no latency|eliminates latency|lowest latency possible/i);
   assert.doesNotMatch(html, /removes ghosting|ghosting removed|no ghosting/i);
 });
+
+// ============================================ OptiScaler's own Ampere keys (their method)
+test('OptiScaler.ini gets the AmpereMfg keys dlss-unlocked drives the engine with', () => {
+  const src = '[FrameGen]\r\nFGInput=auto\r\nAdaMfgUnlock=false\r\nAmpereMfgUnlock=false\r\nAmpereMfgMaxFrames=1\r\nAmpereMfgHardwareBilinear=true\r\n\r\n[Inputs]\r\nEnableDlssInputs=auto\r\n';
+  const out = cfg.optiScalerMfgIni(src, { multiplier: 4, exact: true, cap: 162 });
+  assert.match(out, /^AmpereMfgUnlock=true$/m);
+  assert.match(out, /^AmpereMfgMaxFrames=3$/m);            // 4X
+  assert.match(out, /^AmpereMfgHardwareBilinear=false$/m);  // exact sampling
+  assert.match(out, /^FramerateLimit=162$/m);
+  // Ada's switch and everything else is left exactly as found.
+  assert.match(out, /^AdaMfgUnlock=false$/m);
+  assert.match(out, /^EnableDlssInputs=auto$/m);
+});
+
+test('the two hosts can never disagree about the multiplier', () => {
+  for (const m of [2, 3, 4]) {
+    const eng = cfg.engineIni('', { gpu: AMPERE, multiplier: m });
+    const opti = cfg.optiScalerMfgIni('', { multiplier: m });
+    const a = /^MaxGeneratedFrames=(\d)$/m.exec(eng)[1];
+    const b = /^AmpereMfgMaxFrames=(\d)$/m.exec(opti)[1];
+    assert.equal(a, b, `${m}X disagrees: engine ${a}, optiscaler ${b}`);
+  }
+});

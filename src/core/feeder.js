@@ -617,6 +617,16 @@ async function installMfg(man, exeDir, { mfg, gpu, refresh, before, cacheRoot, o
     mfgcfg.routerIni(await read(path.join(exeDir, 'nvngx.ini')),
       { generator: p.generator, reflex: p.reflex, cap: p.cap }), 'config');
 
+  // If an OptiScaler.ini is in this folder, give it the Ampere-MFG keys too. dlss-unlocked's
+  // fork reads them; upstream 0.9.4 ignores them. Either way the multiplier agrees with the
+  // engine ini, so the two hosts can never disagree about what the user asked for.
+  const optiIni = path.join(exeDir, 'OptiScaler.ini');
+  if (fs.existsSync(optiIni)) {
+    await writeInto(man, optiIni, mfgcfg.optiScalerMfgIni(await read(optiIni),
+      { multiplier: p.multiplier, exact: p.exact, cap: p.cap, reflex: p.reflex }), 'config');
+    man.notes.push('Added OptiScaler\'s Ampere Multi Frame Generation keys to OptiScaler.ini.');
+  }
+
   man.mfgProxy = mfginstall.MFG_PROXY;
   man.mfg = { multiplier: p.multiplier, router: p.router, generator: p.generator,
     reflex: p.reflex, cap: p.cap, exact: p.exact, engine: got.version };

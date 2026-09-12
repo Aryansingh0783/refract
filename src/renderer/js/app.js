@@ -405,6 +405,7 @@
         'Hook mode 1: the add-on also patches the game\'s Streamline modules, which is what the 1-Click reference ships for pre-Blackwell cards.',
         'The game is pointed at the discrete GPU, so a laptop cannot quietly run it on the iGPU.',
         'If it still does not work, Refract writes an error report named after your card onto your Desktop, by itself, with the log line that explains why.',
+        'Multi Frame Generation: 2X/3X/4X through the bundled dlssg_sm86 engine. Turn it on per game on that game\'s Setup tab.',
       ],
       watch: [
         'Laptop cards have less VRAM: 6 GB on a 4050. Neural rendering may not fit alongside path tracing.',
@@ -421,8 +422,10 @@
         'Hook mode 1, as on RTX 40.',
         'The game is pointed at the discrete GPU.',
         'If it still does not work, Refract writes an error report named after your card onto your Desktop, by itself, with the log line that explains why.',
+        'Multi Frame Generation: 2X/3X/4X through the bundled dlssg_sm86 engine (NVIDIA\'s DLSS-G pipeline with Ampere kernels). Turn it on per game on that game\'s Setup tab.',
       ],
       watch: [
+        'Frame generation adds latency. Refract sets Reflex and a frame cap, but the engine has no Reflex Warp.',
         'Antivirus: a modified NVIDIA runtime is the kind of file real-time protection quarantines seconds after it is written. If DLSS 5 vanishes, add the game folder as an exclusion and repair.',
         'This is the heaviest generation to run neural rendering on. Neural Screen\'s reduced-resolution mode is often the better trade.',
       ],
