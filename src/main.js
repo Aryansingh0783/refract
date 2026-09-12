@@ -12,6 +12,7 @@ const reshade = require('./core/reshade');
 const feeder = require('./core/feeder');
 const reshadelog = require('./core/reshadelog');
 const diagnostics = require('./core/diagnostics');
+const errorreport = require('./core/errorreport');
 const gpupref = require('./core/gpupref');
 const { ladder } = require('./core/display');
 const { Session } = require('./core/session');
@@ -326,6 +327,74 @@ function readGameLog(g) {
   return out;
 }
 
+// ---------------------------------------------------------------- automatic failure reports
+// RTX 30 and RTX 40 are the cards Refract cannot test on. When DLSS 5 does not work on one of
+// them, the app does not wait to be asked: it writes a named report onto the Desktop (and a
+// diagnostics zip beside it, once a day) so the failure can be read without a screenshot.
+const reportedToday = new Set();
+
+async function reportFailure({ game = null, verify = null, log = null, error = null, phase = null,
+  route = null, notes = null } = {}) {
+  try {
+    const failure = errorreport.failureOf({ gpu, verify, log, error, phase });
+    if (!failure) return null;
+    const exeDir = game ? exeDirOf(game) : null;
+    const redact = diagnostics.redactor();
+    let antivirus = null;
+    if (failure.code === 'files-removed' || failure.code === 'runtime-missing') {
+      try {
+        const def = require('./core/defender');
+        antivirus = def.explain(await def.detectionsFor([exeDir].filter(Boolean)));
+      } catch {}
+    }
+    const desktop = safeDesktop();
+    const res = errorreport.write({
+      gpu, game, verify, log, failure, route, notes, antivirus, redact, desktop,
+      appVersion: app.getVersion(),
+      folder: exeDir ? diagnostics.folderInventory(exeDir, redact) : null,
+      payload: diagnostics.payloadCheck(),
+    });
+    if (res && res.written) {
+      await dropDiagnostics({ game, exeDir, desktop });
+      logInstall({ event: 'error-report', game: game && game.name, code: res.code, file: res.path });
+      broadcast('errorreport', { path: res.path, code: res.code, summary: res.summary,
+        game: game ? game.name : null, gpu: gpu && gpu.name || null });
+    }
+    return res;
+  } catch (e) {
+    try { logInstall({ event: 'error-report-failed', error: String(e && e.message || e) }); } catch {}
+    return null;
+  }
+}
+
+// The full bundle lands beside the log, but only once per card per day: it is ~1 MB and the
+// point is a Desktop the user can still read.
+async function dropDiagnostics({ game, exeDir, desktop }) {
+  const name = errorreport.fileName(gpu, new Date(), 'zip');
+  const target = path.join(desktop, name);
+  if (reportedToday.has(name) || fs.existsSync(target)) return null;
+  reportedToday.add(name);
+  try {
+    const out = await diagnostics.collectAsync({
+      game, exeDir, gpu, settings: store.get(), appVersion: app.getVersion(),
+      userData: app.getPath('userData'),
+    });
+    fs.writeFileSync(target, out.buffer);
+    return target;
+  } catch { return null; }
+}
+
+function safeDesktop() {
+  try {
+    const d = app.getPath('desktop');
+    if (d && fs.existsSync(d)) return d;
+  } catch {}
+  const home = require('os').homedir();
+  const d = path.join(home, 'Desktop');
+  try { fs.mkdirSync(d, { recursive: true }); } catch {}
+  return d;
+}
+
 // A durable record of every install, so a machine that failed can be understood later.
 function logInstall(entry) {
   try {
@@ -362,7 +431,16 @@ async function onSessionEvent(ch, d) {
       if (neural.startedFor && neural.startedFor === d.game) await neural.stop();
       // The game just wrote its log. Read it and say what actually happened.
       const g = games.find(x => x.name === d.game);
-      if (g) setTimeout(() => { try { broadcast('gamelog', { gameId: g.id, log: readGameLog(g) }); } catch {} }, 1500);
+      if (g) setTimeout(() => {
+        try {
+          const log = readGameLog(g);
+          broadcast('gamelog', { gameId: g.id, log });
+          // Only for games Refract actually set up: a game with no install has nothing to fail.
+          if (feeder.status(exeDirOf(g)).installed) {
+            reportFailure({ game: g, log, phase: 'session', route: feeder.status(exeDirOf(g)).route }).catch(() => {});
+          }
+        } catch {}
+      }, 1500);
     }
   } catch (e) { broadcast('neuralscreen', { state: 'error', error: String(e && e.message || e) }); }
 }
@@ -506,6 +584,7 @@ function registerIpc() {
       );
     } catch (e) {
       logInstall({ game: g.name, exe: g.exe, ok: false, error: String(e && e.message || e), gpu: gpu && gpu.name });
+      await reportFailure({ game: g, error: e, phase: 'install' });
       throw e;
     }
     // Hybrid laptops: a game Windows runs on the iGPU can never do DLSS 5.
@@ -523,12 +602,42 @@ function registerIpc() {
     }
     logInstall({ game: g.name, exe: g.exe, ok: result.ok, route: result.route, gpu: gpu && gpu.name,
       notes: result.notes, failed: (result.verify && result.verify.failed || []).map(f => f.id), antivirus });
+    // The install checked itself and something is wrong: say so on the Desktop, not just in a toast.
+    let errorReport = null;
+    if (!result.ok) {
+      errorReport = await reportFailure({ game: g, verify: result.verify, phase: 'install',
+        route: result.route, notes: result.notes });
+    }
     const out = await reinspect(gameId);
-    return { ...out, install: { ok: result.ok, route: result.route, notes: result.notes, verify: result.verify, antivirus } };
+    return { ...out, install: { ok: result.ok, route: result.route, notes: result.notes, verify: result.verify, antivirus, errorReport } };
   });
 
   // The game's own log, re-read on demand (the card asks after a session ends).
   handle('game:log', async gameId => readGameLog(findGame(gameId)));
+
+  // The same report the app writes by itself, on demand — for a card that fails silently or a
+  // user who wants to send something before playing again.
+  handle('errorreport:write', async gameId => {
+    const g = gameId ? findGame(gameId) : null;
+    const dir = g ? exeDirOf(g) : null;
+    const verify = dir && feeder.status(dir).installed
+      ? feeder.verify(dir, { gpu, unlock: unlockSetting(), route: feeder.status(dir).route }) : null;
+    const log = g ? readGameLog(g) : null;
+    const failure = errorreport.failureOf({ gpu, verify, log, phase: 'manual' }) || {
+      code: 'manual', phase: 'manual', level: 'warn',
+      summary: verify && verify.ok
+        ? 'No failure detected — this report was written on request.'
+        : 'Written on request; see the checks below.',
+    };
+    const res = await reportFailure({ game: g, verify, log, phase: 'manual',
+      route: dir ? feeder.status(dir).route : null }) ||
+      errorreport.write({ gpu, game: g, verify, log, failure, desktop: safeDesktop(),
+        appVersion: app.getVersion(), redact: diagnostics.redactor(),
+        folder: dir ? diagnostics.folderInventory(dir, diagnostics.redactor()) : null,
+        payload: diagnostics.payloadCheck() });
+    if (res && res.path) { try { shell.showItemInFolder(res.path); } catch {} }
+    return res;
+  });
 
   // Everything needed to debug a machine that isn't this one.
   handle('diagnostics:export', async gameId => {
