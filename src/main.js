@@ -14,6 +14,8 @@ const reshadelog = require('./core/reshadelog');
 const diagnostics = require('./core/diagnostics');
 const errorreport = require('./core/errorreport');
 const gpupref = require('./core/gpupref');
+const mfgcore = require('./core/mfg');
+const mfgcfg = require('./core/mfgconfig');
 const { ladder } = require('./core/display');
 const { Session } = require('./core/session');
 const { NeuralScreen, PROFILES: NS_PROFILES, HOTKEYS: NS_HOTKEYS } = require('./core/neuralscreen');
@@ -403,6 +405,30 @@ function logInstall(entry) {
   } catch {}
 }
 
+// The display's refresh rate, for the frame cap. Cached: it only changes when the user does.
+let lastRefresh = null;
+async function refreshHz() {
+  try { const c = await win.call('current'); if (c && c.hz) lastRefresh = c.hz; } catch {}
+  return lastRefresh;
+}
+
+// Multi Frame Generation for one game: whether this card and game can have it, what is set,
+// and what enabling it would actually write.
+function mfgInfo(g, dir) {
+  const cfg = store.game(g.id).mfg || mfgcore.defaults();
+  const gate = mfgcore.eligible(gpu, { dx: g.dx, bitness: g.bitness, apiLabel: g.apiLabel },
+    { experimentalTuring: store.get().mfgExperimental === true });
+  let installed = null;
+  try { installed = (feeder.status(dir).mfg) || null; } catch {}
+  const preview = mfgcfg.plan({ gpu, refresh: lastRefresh, mfg: { ...cfg, enabled: true } });
+  return {
+    eligible: gate.ok, reason: gate.reason || null, code: gate.code || null,
+    experimental: !!gate.experimental, multipliers: gate.multipliers || mfgcfg.MULTIPLIER_CHOICES,
+    setting: cfg, installed, refresh: lastRefresh, preview,
+    engine: require('./core/mfgassets').ENGINE_VERSION,
+  };
+}
+
 // What the game's own DLSS Super Resolution runtime is, and what Refract could put there.
 function srInfo(exeDir) {
   const bundled = require('./core/bundle').file(require('./core/dlss5assets').SR_REL);
@@ -534,6 +560,7 @@ function registerIpc() {
   handle('feeder:status', async gameId => {
     const g = findGame(gameId);
     const dir = g.exeDir || (g.exe ? path.dirname(g.exe) : g.dir);
+    await refreshHz();
     const unlock = unlockSetting();
     const gate = feeder.plan(dir, { bitness: g.bitness || 64, api: g.api || 'dxgi', dx: g.dx || null, gpu, unlock });
     const installed = feeder.status(dir).installed;
@@ -544,6 +571,7 @@ function registerIpc() {
       hooks: { perGame: store.game(gameId).hooks || null, auto: feeder.hooksFor(gpu) },
       upgradeSr: store.get().dlss5UpgradeSr !== false,
       log: readGameLog(g),
+      mfg: mfgInfo(g, dir),
       eligible: gate.ok,
       reason: gate.reason || null,
       already: !!gate.already,
@@ -580,6 +608,8 @@ function registerIpc() {
           unlock: unlockSetting(),
           upgradeSr: store.get().dlss5UpgradeSr !== false,
           hooks: store.game(gameId).hooks || null,
+          mfg: store.game(gameId).mfg || null,
+          refresh: await refreshHz(),
         },
       );
     } catch (e) {
@@ -610,6 +640,23 @@ function registerIpc() {
     }
     const out = await reinspect(gameId);
     return { ...out, install: { ok: result.ok, route: result.route, notes: result.notes, verify: result.verify, antivirus, errorReport } };
+  });
+
+  // Multi Frame Generation. Turning it on records the choice and then runs the ordinary
+  // install, which is what actually puts the engine in the folder — so Enable and Repair are
+  // the same code path and can never drift apart.
+  handle('mfg:set', async (gameId, patch) => {
+    const g = findGame(gameId);
+    const cur = store.game(gameId).mfg || mfgcore.defaults();
+    const next = { ...cur, ...(patch || {}) };
+    if (next.enabled) {
+      const gate = mfgcore.eligible(gpu, { dx: g.dx, bitness: g.bitness, apiLabel: g.apiLabel },
+        { experimentalTuring: store.get().mfgExperimental === true });
+      if (!gate.ok) throw new Error(gate.reason);
+    }
+    store.patchGame(gameId, { mfg: next });
+    await refreshHz();
+    return mfgInfo(g, exeDirOf(g));
   });
 
   // The game's own log, re-read on demand (the card asks after a session ends).

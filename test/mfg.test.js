@@ -509,3 +509,95 @@ test('an MFG failure on an RTX 50 card is still not reported', () => {
     log: { verdict: 'mfg-engine-missing' },
   }), null);
 });
+
+// ================================================================ the Enable MFG button (UI)
+const view = require('../src/shared/mfgview');
+
+const PREVIEW = { cap: 162, realFps: 54, ghosting: 'Native DLSS-G: the game\'s UI is handled by NVIDIA\'s own pass, and exact sampling is on.',
+  latency: 'Reflex on and a 162 fps cap. Frame generation still adds latency; this engine has no Reflex Warp.' };
+
+function eligibleStatus(over = {}) {
+  return { eligible: true, multipliers: [2, 3, 4], engine: 'dlssg_sm86 0.2.4',
+    setting: { enabled: false, multiplier: 2, reflex: 'on' }, installed: null, preview: PREVIEW, ...over };
+}
+
+test('an eligible RTX 30 game gets an Enable MFG button', () => {
+  const html = view.render(eligibleStatus(), 'NVIDIA GeForce RTX 3060');
+  assert.match(html, /data-act="mfg-on"/);
+  assert.match(html, />Enable MFG</);
+  assert.match(html, /NVIDIA GeForce RTX 3060/);
+  assert.match(html, /dlssg_sm86 0\.2\.4/);
+  // The multiplier control offers all three, with the current one pressed.
+  assert.match(html, /data-v="2" aria-pressed="true"/);
+  assert.match(html, /data-v="3" aria-pressed="false"/);
+  assert.match(html, /data-v="4" aria-pressed="false"/);
+  // The cap arithmetic is shown rather than hidden.
+  assert.match(html, /162 fps/);
+  assert.match(html, /about 54 fps/);
+});
+
+test('once on, the button becomes Turn off and the honest lines appear', () => {
+  const html = view.render(eligibleStatus({
+    setting: { enabled: true, multiplier: 3, reflex: 'boost' }, installed: { multiplier: 3 },
+  }), 'NVIDIA GeForce RTX 3060');
+  assert.match(html, /data-act="mfg-off"/);
+  assert.doesNotMatch(html, /data-act="mfg-on"/);
+  assert.match(html, /up to 3X/);
+  assert.match(html, /data-v="3" aria-pressed="true"/);
+  assert.match(html, /Reflex: boost/);
+  assert.match(html, /no Reflex Warp/);
+  // It tells the user the game still has to ask for it — the thing people get wrong.
+  assert.match(html, /turn <b>DLSS Frame Generation<\/b> on/);
+});
+
+test('on but not yet written to the folder says so, and points at Repair', () => {
+  const html = view.render(eligibleStatus({
+    setting: { enabled: true, multiplier: 2, reflex: 'on' }, installed: null,
+  }), 'RTX 3060');
+  assert.match(html, /is on for this game/);
+  assert.match(html, /Enable DLSS 5 or Repair/);
+  assert.match(html, /d5-row warn/);
+});
+
+test('an RTX 50 sees the reason, not a dead control', () => {
+  const html = view.render({ eligible: false, code: 'rtx50',
+    reason: "This card has NVIDIA's own Multi Frame Generation — turn it on in the game instead. Refract does not replace it." },
+  'NVIDIA GeForce RTX 5070');
+  assert.doesNotMatch(html, /data-act="mfg-on"/);
+  assert.doesNotMatch(html, /mfgSeg/);
+  assert.match(html, /NVIDIA&#39;s own Multi Frame Generation/);
+  assert.match(html, /Multi Frame Generation<\/div>/);   // the heading is still there
+});
+
+test('a DX11 game explains itself', () => {
+  const html = view.render({ eligible: false, code: 'api',
+    reason: 'Multi Frame Generation is DirectX 12 only. This game uses DirectX 11.' }, 'RTX 3060');
+  assert.match(html, /DirectX 12 only/);
+  assert.doesNotMatch(html, /Enable MFG/);
+});
+
+test('RTX 20 is labelled experimental on the button', () => {
+  const html = view.render(eligibleStatus({ experimental: true }), 'RTX 2060');
+  assert.match(html, /Experimental on RTX 20/);
+  assert.match(html, /data-act="mfg-on"/);
+});
+
+test('no status at all renders nothing rather than a broken panel', () => {
+  assert.equal(view.render(null, 'x'), '');
+  assert.equal(view.render(undefined), '');
+});
+
+test('the panel escapes whatever the status hands it', () => {
+  const html = view.render(eligibleStatus({ engine: '<img src=x onerror=alert(1)>' }), '<b>pwn</b>');
+  assert.doesNotMatch(html, /<img src=x/);
+  assert.doesNotMatch(html, /<b>pwn<\/b>/);
+  assert.match(html, /&lt;img src=x/);
+});
+
+test('the button never promises latency the engine cannot deliver', () => {
+  const html = view.render(eligibleStatus({
+    setting: { enabled: true, multiplier: 4, reflex: 'boost' }, installed: { multiplier: 4 },
+  }), 'RTX 3060');
+  assert.doesNotMatch(html, /zero latency|no latency|eliminates latency|lowest latency possible/i);
+  assert.doesNotMatch(html, /removes ghosting|ghosting removed|no ghosting/i);
+});

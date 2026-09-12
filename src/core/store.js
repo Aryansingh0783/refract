@@ -6,7 +6,7 @@ const { defaults } = require('../shared/looks');
 const DEFAULTS = {
   version: 1,
   manualDirs: [],
-  games: {},            // id -> { tier, exe, neuralKey, lastLook, engine, gpuPreference (value replaced on install) }
+  games: {},            // id -> { tier, exe, neuralKey, lastLook, engine, mfg, gpuPreference (value replaced on install) }
   looks: defaults(),    // shader parameter values
   startLook: 'default',
   transition: 0.6,

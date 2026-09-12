@@ -270,3 +270,10 @@ main{min-width:0;min-height:0;padding:0 22px 18px 18px;display:flex}
 .sheet-foot{display:flex;gap:8px;align-items:center}
 .sheet-foot i{color:var(--warn);font-size:16px}
 .sheet .actions{justify-content:flex-end}
+
+/* ---------------------------------------------- Multi Frame Generation (0.5) */
+.row-h.sub { margin-top: 14px; opacity: .72; font-size: .82rem; }
+.mfg-seg { margin: 2px 0 6px; max-width: 260px; }
+.mfg-seg button { font-variant-numeric: tabular-nums; }
+.mfg-note { display: block; font-size: .8rem; opacity: .68; line-height: 1.45; }
+.d5-row.sub .mfg-note { margin-top: 2px; }
