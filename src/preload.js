@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('refract', {
   exportDiagnostics: gameId => invoke('diagnostics:export', gameId),
   writeErrorReport: gameId => invoke('errorreport:write', gameId),
   setMfg: (gameId, patch) => invoke('mfg:set', gameId, patch),
+  checkUpdate: () => invoke('update:check'),
+  installUpdate: () => invoke('update:install'),
   neuralStatus: () => invoke('neuralscreen:status'),
   neuralStart: gameId => invoke('neuralscreen:start', gameId),
   neuralStop: () => invoke('neuralscreen:stop'),
@@ -47,7 +49,7 @@ contextBridge.exposeInMainWorld('refract', {
   patchSettings: p => invoke('settings:patch', p),
   openExternal: url => invoke('shell:open', url),
   on: (ch, fn) => {
-    const allowed = ['telemetry', 'look', 'display', 'session', 'settings', 'library', 'dlss5:progress', 'hotkeys', 'overlay:mode', 'neuralscreen', 'gamelog', 'errorreport'];
+    const allowed = ['telemetry', 'look', 'display', 'session', 'settings', 'library', 'dlss5:progress', 'hotkeys', 'overlay:mode', 'neuralscreen', 'gamelog', 'errorreport', 'update'];
     if (!allowed.includes(ch)) return () => {};
     const h = (_e, data) => fn(data);
     ipcRenderer.on(ch, h);

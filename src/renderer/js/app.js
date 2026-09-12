@@ -985,6 +985,53 @@
   }
   function openGuide() { renderGuideKey(); const w = $('#welcome'); w.hidden = false; Prism.pop($('.sheet-card', w)); $('#welcomeDone').focus(); }
   function closeGuide() { $('#welcome').hidden = true; if (!state.settings.onboarded) { state.settings.onboarded = true; call(api.markOnboarded).catch(() => {}); } }
+  // ---------------------------------------------------------------- updates
+  let updInfo = null;
+  function showUpdate(info) {
+    updInfo = info;
+    const b = $('#updBanner'), t = $('#updBannerText');
+    if (!b) return;
+    if (!info || !info.newer) { b.hidden = true; return; }
+    t.textContent = `Version ${info.latest} is out — you have ${info.current}.` +
+      (info.downloadable ? ' Updating keeps your settings and your set-up games.' : ' Its installer is not attached yet.');
+    $('#updNow').textContent = info.downloadable ? 'Update now' : 'Open the release';
+    b.hidden = false;
+  }
+  async function checkUpdate(loud) {
+    const line = $('#updLine');
+    if (loud && line) line.textContent = 'Checking GitHub…';
+    const r = await call(api.checkUpdate).catch(e => { if (loud && line) line.textContent = 'Could not reach GitHub: ' + e.message; return null; });
+    if (!r) return null;
+    showUpdate(r);
+    if (line) {
+      line.textContent = r.newer
+        ? `Version ${r.latest} is available. You have ${r.current}.`
+        : `You are on the newest version (${r.current}).`;
+    }
+    return r;
+  }
+  $('#updCheck') && $('#updCheck').addEventListener('click', async e => {
+    const b = e.currentTarget; b.disabled = true; await checkUpdate(true); b.disabled = false;
+  });
+  $('#updDismiss') && $('#updDismiss').addEventListener('click', () => { $('#updBanner').hidden = true; });
+  $('#updNow') && $('#updNow').addEventListener('click', async e => {
+    const b = e.currentTarget; b.disabled = true;
+    const r = await call(api.installUpdate).catch(() => null);
+    if (r && !r.ok) Prism.toast('Update', r.reason || 'Could not update.', 'err');
+    b.disabled = false;
+  });
+  api.on('update', ev => {
+    if (!ev) return;
+    if (ev.state === 'downloading') {
+      $('#updBannerText').textContent = `Downloading ${ev.version}${ev.frac ? ` — ${Math.round(ev.frac * 100)}%` : '…'}`;
+      $('#updBanner').hidden = false;
+    } else if (ev.state === 'installing') {
+      $('#updBannerText').textContent = `Installing ${ev.version}. DIHLSS5 will close and reopen.`;
+    }
+  });
+  // One quiet look on start-up, so an out-of-date build says so without being asked.
+  setTimeout(() => { checkUpdate(false).catch(() => {}); }, 4000);
+
   // Who made this. Filled from the main process so the name and link live in one place.
   function renderPublisher() {
     const pub = state.publisher || {};

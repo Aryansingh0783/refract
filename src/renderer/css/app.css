@@ -277,3 +277,12 @@ main{min-width:0;min-height:0;padding:0 22px 18px 18px;display:flex}
 .mfg-seg button { font-variant-numeric: tabular-nums; }
 .mfg-note { display: block; font-size: .8rem; opacity: .68; line-height: 1.45; }
 .d5-row.sub .mfg-note { margin-top: 2px; }
+
+/* ---------------------------------------------- update banner (0.5) */
+.upd-banner { display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+  background: color-mix(in oklab, var(--accent, #f0a020) 16%, transparent);
+  border-bottom: 1px solid color-mix(in oklab, var(--accent, #f0a020) 32%, transparent);
+  font-size: .88rem; }
+.upd-banner .ph-arrow-circle-up { font-size: 1.2rem; opacity: .9; }
+.upd-banner span { flex: 1; }
+.upd-banner button { flex: none; }

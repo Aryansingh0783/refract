@@ -52,7 +52,13 @@
     </button>
   </nav>
 
-  <main>
+  <div class="upd-banner" id="updBanner" hidden role="status">
+  <i class="ph ph-arrow-circle-up" aria-hidden="true"></i>
+  <span id="updBannerText">A newer version is available.</span>
+  <button class="btn glassy sm" id="updNow"><span>Update now</span></button>
+  <button class="icon-btn" id="updDismiss" aria-label="Dismiss"><i class="ph ph-x" aria-hidden="true"></i></button>
+</div>
+<main>
     <!-- ============================== LIBRARY -->
     <section class="view" id="view-library">
       <div class="hero" id="hero"></div>
@@ -172,6 +178,9 @@
             <button class="btn ghost sm" id="exportDiag"><i class="ph ph-export" aria-hidden="true"></i><span>Export</span></button></div>
           <div class="trow"><div><b>Error report on the Desktop</b><small>On RTX 30 and RTX 40 cards DIHLSS5 writes this by itself whenever DLSS 5 fails to run — a plain text file named after your card, on your Desktop. Write one now to send before you play.</small></div>
             <button class="btn ghost sm" id="writeErrorReport"><i class="ph ph-warning-circle" aria-hidden="true"></i><span>Write now</span></button></div>
+          <div class="card-h"><h3>Updates</h3></div>
+          <div class="trow"><div><b>Check for updates</b><small id="updLine">Looks at this project's GitHub releases. Updating keeps every setting and every game you have set up.</small></div>
+            <button class="btn ghost sm" id="updCheck"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i><span>Check now</span></button></div>
           <div class="card-h"><h3>About</h3></div>
           <div class="trow"><div><b id="aboutName">DIHLSS5</b><small id="aboutBy">Published by Aryan</small></div>
             <a class="btn ghost sm" id="pubLink" href="#" target="_blank" rel="noopener"><i class="ph ph-github-logo" aria-hidden="true"></i><span>GitHub</span></a></div>

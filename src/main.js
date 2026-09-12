@@ -15,6 +15,7 @@ const diagnostics = require('./core/diagnostics');
 const errorreport = require('./core/errorreport');
 const gpupref = require('./core/gpupref');
 const mfgcore = require('./core/mfg');
+const updater = require('./core/updater');
 const mfgcfg = require('./core/mfgconfig');
 const { ladder } = require('./core/display');
 const { Session } = require('./core/session');
@@ -39,6 +40,7 @@ let mainWin = null, overlayWin = null;
 let games = [];
 let gpu = { available: false };
 let lastTelemetry = null;
+let lastUpdate = null;
 let stopTelemetry = null;
 let currentLook = null;
 const rendererLog = [];      // console errors from any window (checked by --selftest)
@@ -321,9 +323,9 @@ function registerShortcuts() {
 function migrateUserData() {
   try {
     const dir = app.getPath('userData');
-    if (fs.existsSync(path.join(dir, 'settings.json'))) return;      // already ours
+    if (fs.existsSync(path.join(dir, 'refract-settings.json'))) return;   // already ours
     const legacy = path.join(path.dirname(dir), 'Refract');
-    if (legacy === dir || !fs.existsSync(path.join(legacy, 'settings.json'))) return;
+    if (legacy === dir || !fs.existsSync(path.join(legacy, 'refract-settings.json'))) return;
     fs.mkdirSync(dir, { recursive: true });
     for (const name of fs.readdirSync(legacy)) {
       const from = path.join(legacy, name), to = path.join(dir, name);
@@ -709,6 +711,33 @@ function registerIpc() {
         payload: diagnostics.payloadCheck() });
     if (res && res.path) { try { shell.showItemInFolder(res.path); } catch {} }
     return res;
+  });
+
+  // Updates. The check is a plain read of the Releases API; nothing downloads or runs without
+  // the user asking for it, and only the project's own signed installer is ever accepted.
+  handle('update:check', async () => {
+    const r = await updater.check(app.getVersion());
+    lastUpdate = r;
+    return r;
+  });
+
+  handle('update:install', async () => {
+    const r = lastUpdate || await updater.check(app.getVersion());
+    if (!r.newer) return { ok: false, reason: 'This is already the newest version.' };
+    if (!r.asset) {
+      await shell.openExternal(r.page);
+      return { ok: false, reason: 'That release has no installer attached yet — its page is open in your browser.' };
+    }
+    broadcast('update', { state: 'downloading', version: r.latest });
+    const file = await updater.download(r.asset, {
+      dir: app.getPath('temp'),
+      onProgress: frac => broadcast('update', { state: 'downloading', version: r.latest, frac }),
+    });
+    broadcast('update', { state: 'installing', version: r.latest });
+    updater.install(file);
+    // The installer cannot replace files this process has open, so step aside immediately.
+    setTimeout(() => app.quit(), 800);
+    return { ok: true, version: r.latest, file };
   });
 
   // Everything needed to debug a machine that isn't this one.
