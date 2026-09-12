@@ -110,6 +110,29 @@ function routerIni(text, { generator = 'dlssg', reflex = 'on', cap = null, mode 
   ]);
 }
 
+// OptiScaler's own Ampere-MFG keys. dlss-unlocked's fork of OptiScaler drives the same engine
+// from OptiScaler.ini instead of a standalone proxy, using these:
+//
+//   AmpereMfgUnlock=true  AmpereMfgMaxFrames=3  AmpereMfgKernelImage=auto  AmpereMfgHardwareBilinear=false
+//
+// Upstream OptiScaler 0.9.4 does not know them and ignores unknown keys, so writing them costs
+// nothing there and makes MFG work immediately if the user ever swaps in a build that does.
+// Refract writes both this and the standalone engine ini: whichever host is present, the same
+// multiplier and the same exact-sampling choice apply.
+function optiScalerMfgIni(text, { multiplier = 2, exact = true, kernel = 'auto', cap = null, reflex = 'on' } = {}) {
+  const m = clampMultiplier(multiplier);
+  const pairs = [
+    ['FrameGen', 'AmpereMfgUnlock', 'true'],
+    ['FrameGen', 'AmpereMfgMaxFrames', MULTIPLIERS[m]],
+    ['FrameGen', 'AmpereMfgKernelImage', kernel],
+    ['FrameGen', 'AmpereMfgHardwareBilinear', exact ? 'false' : 'true'],
+  ];
+  // Latency: OptiScaler's own Reflex forcing and frame limiter, matching the engine ini.
+  if (reflex !== 'off') pairs.push(['Inputs', 'ForceReflex', 'auto']);
+  if (Number.isFinite(Number(cap)) && Number(cap) > 0) pairs.push(['FrameGen', 'FramerateLimit', Math.floor(Number(cap))]);
+  return setAll(text, pairs);
+}
+
 // One place that turns a per-game MFG setting into everything that gets written, so the UI, the
 // installer and the verifier all agree on what "3X, lowest latency" means.
 function plan({ gpu = null, refresh = null, mfg = {} } = {}) {
@@ -143,5 +166,5 @@ function plan({ gpu = null, refresh = null, mfg = {} } = {}) {
 
 module.exports = {
   MULTIPLIERS, MULTIPLIER_CHOICES, routerFor, clampMultiplier, frameCap,
-  engineIni, routerIni, setKey, plan,
+  engineIni, routerIni, optiScalerMfgIni, setKey, plan,
 };
