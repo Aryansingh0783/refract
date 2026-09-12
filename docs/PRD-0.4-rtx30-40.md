@@ -261,6 +261,23 @@ Legend: `[ ]` to do · **(V)** needs verification on real hardware · **(T)** ne
       → Reproduced: with the runtime absent and the universal runtime **on**, 0.3 does offer Repair; with it **switched off** 0.3 said "DLSS 5 already set up" — a green badge over a game that cannot run NR. Fixed: that state is now "DLSS 5 will not run yet" with a Turn-it-on button.
       with an old 0.2-style manifest, confirming whether Repair is required and silent
 
+## A′. Antivirus (found while building the alpha)
+
+Windows Defender removed the 1-Click-DLSS5 archive from this machine twice while the payload was
+being built (`Get-MpThreatDetection` → ThreatID 2147963166), and had already eaten the copy in
+Downloads. A patched `nvngx_dlssnr.dll` is exactly the kind of file real-time protection
+quarantines *seconds after* it is written — which, from inside the game, is indistinguishable
+from Refract never installing it. **This is now a leading candidate for the RTX 3060 report.**
+
+- [x] A′1 Source the DLSS runtimes from the Streamline package instead of the 1-Click zip
+- [x] A′2 `verify()` distinguishes "we installed it and it is gone" from "it was never installed",
+      and names the antivirus
+- [x] A′3 `defender.js` reads Defender's recent detections for the game folder; the install toast
+      and the diagnostics bundle both carry them
+- [ ] A′4 Offer to add a Defender exclusion for the game folder (needs elevation — decide whether
+      to prompt or to print the one-line PowerShell for the user) **(V)**
+- [ ] A′5 Ask the 3060 owner for `Get-MpThreatDetection` output — one command settles it **(V)**
+
 ## B. R1 — install verification and loud failures
 
 - [x] B1 `verifyInstall(exeDir, {gpu, unlock})` in `src/core/feeder.js`: returns per-item pass/fail
@@ -286,13 +303,16 @@ Legend: `[ ]` to do · **(V)** needs verification on real hardware · **(T)** ne
 
 ## D. R3 — DLSS runtime pipeline
 
-- [ ] D1 Add `nvngx_dlss.dll` 310.8 and `sl.dlss_nr.dll` to the payload catalog with pinned SHA-256
-- [ ] D2 `payload/manifest.json` + bundle wiring + selftest "bundled payload" covers them **(T)**
-- [ ] D3 DIRECT route: version-compare and upgrade the game's `nvngx_dlss.dll` (recursive, depth 4),
+- [x] D1 Add `nvngx_dlss.dll` 310.8 and `sl.dlss_nr.dll` to the payload catalog with pinned SHA-256
+      → Bundled without a new download: the Streamline package Refract already ships contains the same `nvngx_dlss.dll` 310.8 (`c85f971c…`) and `sl.dlss_nr.dll` 2.13 (`9f6672e5…`) that 1-Click uses. Windows Defender **quarantines the 1-Click zip on sight** (ThreatID 2147963166, seen twice on this machine), so sourcing from Streamline also avoids a build that fails on any protected PC.
+- [x] D2 `payload/manifest.json` + bundle wiring + selftest "bundled payload" covers them **(T)**
+- [x] D3 DIRECT route: version-compare and upgrade the game's `nvngx_dlss.dll` (recursive, depth 4),
+      → Verified end to end on a folder holding a real DLSS 310.6: upgraded to 310.8, original backed up, restore byte-identical.
       backing up the original, manifest-tracked **(T)**
 - [ ] D4 Stale `sl.dlss_nr.dll` handling per the A/B result **(V)** **(T)**
-- [ ] D5 Never touch other `sl.*.dll` files; regression test that asserts it **(T)**
-- [ ] D6 "DLSS runtimes" panel per game: what's there, what Refract can install, one-click upgrade
+- [x] D5 Never touch other `sl.*.dll` files; regression test that asserts it **(T)**
+- [x] D6 "DLSS runtimes" panel per game: what's there, what Refract can install, one-click upgrade
+      → Partly: the DLSS 5 panel shows the game's runtime version and offers the upgrade. A full runtimes panel is still open.
 
 ## E. R4 — laptops and hybrid graphics
 

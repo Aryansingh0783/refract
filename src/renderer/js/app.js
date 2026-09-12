@@ -339,6 +339,13 @@
       html += `<div class="d5-row sub"><div><span>${text}</span></div>${fs.gpuSupport === 'patch'
         ? `<button class="btn ghost sm" data-act="${u.enabled === false ? 'unlock-on' : 'pick-patched'}">${u.enabled === false ? 'Turn on' : own ? 'Change file' : 'Use my own file'}</button>` : ''}</div>`;
     }
+    // The game's own DLSS runtime: the add-on's neural pass depends on it.
+    if (fs && fs.dlssSr && (fs.dlssSr.theirs || fs.dlssSr.upgrade)) {
+      const sr = fs.dlssSr;
+      html += `<div class="d5-row sub"><div><span>Game's DLSS runtime: <b>${esc(sr.theirs || 'unknown')}</b>${
+        sr.upgrade ? ` — Refract can upgrade it to <b>${esc(sr.ours)}</b>, which is what the neural pass expects.` : `. ${esc(sr.why || '')}`}</span></div>${
+        sr.upgrade ? '<button class="btn ghost sm" data-act="feeder-install">Upgrade</button>' : ''}</div>`;
+    }
     html += lastRunRow(fs && fs.log);
     el.innerHTML = html;
   }
@@ -479,7 +486,9 @@
         const ng = await call(api.feederInstall, g.id);
         replaceGame(ng);
         const v = ng.install && ng.install.verify;
-        if (v && !v.ok) Prism.toast('DLSS 5 is not complete', v.summary + ' Open the game card for the full list.', 'err');
+        const av = ng.install && ng.install.antivirus;
+        if (av) Prism.toast('Something removed the runtime', av, 'err');
+        else if (v && !v.ok) Prism.toast('DLSS 5 is not complete', v.summary + ' Open the game card for the full list.', 'err');
         else Prism.toast('DLSS 5 ready', 'In the game: Borderless, DLSS on, then Home → Add-ons to tune it.');
       }
       else if (act === 'feeder-remove') { replaceGame(await call(api.feederRestore, g.id)); Prism.toast('DLSS 5 removed', 'The game folder is back to how it was.'); }

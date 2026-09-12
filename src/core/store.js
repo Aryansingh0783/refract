@@ -19,6 +19,7 @@ const DEFAULTS = {
   reducedTransparency: false,
   feederPayloadDir: null,
   nativeMode: null,     // desktop mode captured before Refract changed it
+  dlss5UpgradeSr: true, // upgrade a game's own nvngx_dlss.dll when Refract's build is newer
   // The bundled NeuralScreen engine (screen-space DLSS 5).
   neuralScreen: { profile: 'Natural', faster: false, workScale: 0.65 },
 };

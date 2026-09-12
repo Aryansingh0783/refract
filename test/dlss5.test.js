@@ -33,8 +33,9 @@ function fixturePayload(dir) {
   const d2 = P(path.join(dir, 'sl', 'nvngx_dlssnr.dll')); fs.writeFileSync(d2, 'PAYLOAD-NR');
   const d3 = P(path.join(dir, 'sl', 'sl.dlss.dll')); fs.writeFileSync(d3, 'PAYLOAD-SL');
   const nr = P(path.join(dir, 'ngx', 'nvngx_dlssnr.dll')); fs.writeFileSync(nr, 'UNIVERSAL-NR');
+  const sr = P(path.join(dir, 'ngx', 'nvngx_dlss.dll')); fs.writeFileSync(sr, 'REFRACT-DLSS-310.8');
   return { ok: true, route: 'native', versions: { renodx5: 'test', dlssnr: 'test' }, reshadeDll, addon, addonName: 'renodx-dlss5-v2.5.addon64',
-    dlls: [d1, d2, d3], nvngxDlss: d1, nvngxNrUniversal: nr };
+    dlls: [d1, d2, d3], nvngxDlss: d1, nvngxNrUniversal: nr, nvngxDlssSr: sr };
 }
 // A game that already ships DLSS (so the add-on has NGX to hook).
 function gameWithDlss(gameDir) {
@@ -506,5 +507,48 @@ test('install verifies itself and reports the result', async () => {
   assert.strictEqual(r.verify.ok, true);
   assert.deepStrictEqual(r.verify.failed, []);
   assert.strictEqual(fs.readFileSync(path.join(dir, 'nvngx_dlssnr.dll'), 'utf8'), 'UNIVERSAL-NR');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('the game\'s DLSS runtime is only upgraded when Refract\'s is provably newer', async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-sr-'));
+  // The decision itself, without needing real PE resources
+  assert.strictEqual(feeder.srDecision('310.8.0.0', path.join(base, 'nothing.dll')).upgrade, false, 'a game with no DLSS is left alone');
+  const fake = path.join(base, 'nvngx_dlss.dll'); fs.writeFileSync(fake, 'not a real PE');
+  const d = feeder.srDecision('310.8.0.0', fake);
+  assert.strictEqual(d.upgrade, false, 'an unreadable version is left alone rather than guessed at');
+  assert.match(d.why, /Could not read/);
+  assert.strictEqual(feeder.srDecision(null, fake).upgrade, false);
+
+  // and end to end: the game's own DLSS survives an install when its version cannot be read
+  const payload = fixturePayload(path.join(base, 'p'));
+  const dir = path.join(base, 'g'); const exe = gameWithDlss(dir);
+  const before = fs.readFileSync(path.join(dir, 'nvngx_dlss.dll'), 'utf8');
+  const unlock = { enabled: true, source: 'own', runtime: payload.nvngxNrUniversal };
+  const r = await feeder.install({ exe, api: 'dxgi', dx: 12, bitness: 64 }, payload, { cacheRoot: path.join(base, 'c'), gpu: AMPERE, unlock });
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'nvngx_dlss.dll'), 'utf8'), before, 'the game keeps its own DLSS runtime');
+  assert.ok(r.notes.some(n => /Could not read|already current|no nvngx_dlss/.test(n)), 'and the install says why');
+  // switching upgrades off is respected
+  const dir2 = path.join(base, 'g2'); const exe2 = gameWithDlss(dir2);
+  const r2 = await feeder.install({ exe: exe2, api: 'dxgi', dx: 12, bitness: 64 }, payload, { cacheRoot: path.join(base, 'c'), gpu: AMPERE, unlock, upgradeSr: false });
+  assert.ok(r2.notes.some(n => /upgrades are switched off/.test(n)));
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('a runtime Refract installed that has since vanished is called out as an antivirus', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-av-'));
+  const dir = path.join(base, 'g');
+  installedGame(dir, { nr: 'UNIVERSAL-NR' });
+  const nrPath = path.join(dir, 'nvngx_dlssnr.dll');
+  fs.writeFileSync(path.join(dir, 'refract-feeder.json'), JSON.stringify({
+    version: 5, route: 'native', added: [{ path: nrPath, kind: 'runtime-nr' }], replaced: [], notes: [],
+  }));
+  const opts = { gpu: BLACKWELL, unlock: { enabled: true }, route: 'native' };
+  assert.strictEqual(feeder.verify(dir, opts).ok, true);
+  fs.rmSync(nrPath);                        // what real-time protection does, seconds later
+  const v = feeder.verify(dir, opts);
+  assert.strictEqual(v.ok, false);
+  assert.strictEqual(v.vanished, true);
+  assert.match(v.checks.find(c => c.id === 'runtime').detail, /antivirus most likely quarantined/);
   fs.rmSync(base, { recursive: true, force: true });
 });

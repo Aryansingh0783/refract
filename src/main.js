@@ -334,6 +334,14 @@ function logInstall(entry) {
   } catch {}
 }
 
+// What the game's own DLSS Super Resolution runtime is, and what Refract could put there.
+function srInfo(exeDir) {
+  const bundled = require('./core/bundle').file(require('./core/dlss5assets').SR_REL);
+  const ours = require('./core/dlss5assets').SR_VERSION;
+  const d = feeder.srDecision(bundled ? ours : null, path.join(exeDir, 'nvngx_dlss.dll'));
+  return { ours: bundled ? ours : null, theirs: d.theirs || null, upgrade: !!d.upgrade, why: d.why };
+}
+
 function neuralInfo() {
   const av = neural.available(gpu);
   return { available: av.ok, reason: av.reason || null, version: neural.version(), state: neural.state(),
@@ -453,6 +461,8 @@ function registerIpc() {
     return {
       installed,
       verify: installed ? feeder.verify(dir, { gpu, unlock, route: feeder.status(dir).route }) : null,
+      dlssSr: srInfo(dir),
+      upgradeSr: store.get().dlss5UpgradeSr !== false,
       log: readGameLog(g),
       eligible: gate.ok,
       reason: gate.reason || null,
@@ -488,6 +498,7 @@ function registerIpc() {
           onProgress: p => broadcast('dlss5:progress', { gameId, ...p }),
           gpu,
           unlock: unlockSetting(),
+          upgradeSr: store.get().dlss5UpgradeSr !== false,
         },
       );
     } catch (e) {
@@ -502,10 +513,15 @@ function registerIpc() {
         if (pref.changed) store.patchGame(g.id, { gpuPreference: pref.previous });
       }
     } catch {}
+    // A file we just wrote that is already gone is an antivirus, not a bug in the copy.
+    let antivirus = null;
+    if (result.verify && result.verify.vanished) {
+      try { antivirus = require('./core/defender').explain(await require('./core/defender').detectionsFor([exeDirOf(g)])); } catch {}
+    }
     logInstall({ game: g.name, exe: g.exe, ok: result.ok, route: result.route, gpu: gpu && gpu.name,
-      notes: result.notes, failed: (result.verify && result.verify.failed || []).map(f => f.id) });
+      notes: result.notes, failed: (result.verify && result.verify.failed || []).map(f => f.id), antivirus });
     const out = await reinspect(gameId);
-    return { ...out, install: { ok: result.ok, route: result.route, notes: result.notes, verify: result.verify } };
+    return { ...out, install: { ok: result.ok, route: result.route, notes: result.notes, verify: result.verify, antivirus } };
   });
 
   // The game's own log, re-read on demand (the card asks after a session ends).
@@ -514,7 +530,7 @@ function registerIpc() {
   // Everything needed to debug a machine that isn't this one.
   handle('diagnostics:export', async gameId => {
     const g = gameId ? findGame(gameId) : null;
-    const out = diagnostics.collect({
+    const out = await diagnostics.collectAsync({
       game: g, exeDir: g ? exeDirOf(g) : null, gpu, settings: store.get(),
       appVersion: app.getVersion(), userData: app.getPath('userData'),
       session: session.active ? { game: session.active.game.name, seen: session.active.seen } : null,
@@ -673,7 +689,7 @@ function registerIpc() {
 
   handle('settings:patch', async p => {
     const allowed = {};
-    for (const k of ['overlay', 'lookHotkeys', 'transition', 'reducedTransparency', 'ambientMotion', 'dlss5Unlock', 'dlss5PatchedRuntime', 'dlss5UnlockSource']) if (k in p) allowed[k] = p[k];
+    for (const k of ['overlay', 'lookHotkeys', 'transition', 'reducedTransparency', 'ambientMotion', 'dlss5Unlock', 'dlss5PatchedRuntime', 'dlss5UnlockSource', 'dlss5UpgradeSr']) if (k in p) allowed[k] = p[k];
     if (p.neuralScreen) {
       const n = p.neuralScreen, cur = store.get().neuralScreen;
       allowed.neuralScreen = { ...cur,

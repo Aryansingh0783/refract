@@ -162,7 +162,7 @@ async function run(ctx) {
     const info = bundle.info();
     if (!info) return { ok: false, detail: 'no payload found (run npm run payload, or reinstall)' };
     const assets = require('./core/dlss5assets');
-    const need = ['reshade/ReShade64.dll', 'addons/renodx-dlss5.addon64', 'addons/dlss5-bridge.addon64', assets.NR_REL,
+    const need = ['reshade/ReShade64.dll', 'addons/renodx-dlss5.addon64', 'addons/dlss5-bridge.addon64', assets.NR_REL, assets.SR_REL, assets.SL_NR_REL,
       'feeder/dlss5-feed.addon64', 'feeder/DLSS5_Feed.fx', 'feeder/headers/ReShade.fxh',
       'neuralscreen/main.py', 'neuralscreen/runtime/pythonw.exe', 'neuralscreen/native/nvngx.dll'];
     const bad = need.filter(r => !bundle.file(r));
