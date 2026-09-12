@@ -201,6 +201,26 @@ async function run(ctx) {
     return { ok, detail: { verifyFailed: v.failed.map(f => f.id), quick, planActions: plan.actions, verdict: log.verdict, zipBytes: bundleOut.buffer.length, zip: bundleOut.name } };
   });
 
+  await check('RTX 30/40 failure writes a named error log on the Desktop', async () => {
+    const errorreport = require('./core/errorreport');
+    const desktop = path.join(os.tmpdir(), 'refract-selftest-desktop');
+    fs.rmSync(desktop, { recursive: true, force: true });
+    fs.mkdirSync(desktop, { recursive: true });
+    const ampere = { name: 'NVIDIA GeForce RTX 3060', driver: '576.02', series: 30, arch: 'Ampere', dlss5: 'patch', memoryTotal: 12288 };
+    const log = { verdict: 'runtime-missing', text: 'The neural-rendering runtime is not in the game folder.', line: 'ERROR | nvngx_dlssnr.dll was not found' };
+    const first = errorreport.write({ gpu: ampere, game: { name: 'Selftest Game' }, log, desktop, appVersion: 'selftest', phase: 'session' });
+    const dupe = errorreport.write({ gpu: ampere, game: { name: 'Selftest Game' }, log, desktop, appVersion: 'selftest', phase: 'session' });
+    // An RTX 50 machine must never get one of these: that path is verified and has its own UI.
+    const blackwell = errorreport.write({ gpu: { name: 'RTX 5070', series: 50, dlss5: 'native' }, game: { name: 'Selftest Game' }, log, desktop });
+    const names = fs.readdirSync(desktop);
+    const text = first && first.path ? fs.readFileSync(first.path, 'utf8') : '';
+    const ok = !!(first && first.written) && !!(dupe && dupe.written === false) && blackwell === null
+      && names.length === 1 && /^Refract-error-NVIDIA-GeForce-RTX-3060-\d{4}-\d{2}-\d{2}\.log$/.test(names[0])
+      && /WHAT TO TRY NEXT/.test(text) && /runtime-missing/.test(text);
+    fs.rmSync(desktop, { recursive: true, force: true });
+    return { ok, detail: { file: names[0] || null, deduped: dupe && dupe.written === false, rtx50Skipped: blackwell === null, bytes: text.length } };
+  });
+
   await check('neuralscreen engine (bundled, RTX 30/40/50)', async () => {
     const { NeuralScreen } = require('./core/neuralscreen');
     const ns = new NeuralScreen({ home: path.join(os.tmpdir(), 'refract-selftest-ns') });

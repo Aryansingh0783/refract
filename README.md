@@ -156,6 +156,24 @@ the bundled payload's hashes, the Neural Screen engine, shader compilation with
 
 ## If something is not working
 
+**On an RTX 30 or RTX 40 card, Refract tells you itself.** Those two generations are the ones
+this project has no hardware to test on, so when DLSS 5 does not run there — a verification that
+fails after an install, or a play session whose ReShade log says the pass never happened —
+Refract writes a report onto your Desktop by itself:
+
+```
+Refract-error-NVIDIA-GeForce-RTX-3060-2026-09-12.log
+Refract-error-NVIDIA-GeForce-RTX-3060-2026-09-12.zip   (the full diagnostics bundle)
+```
+
+The log is plain text: your card and driver, the game and route, the exact failure and the log
+line behind it, every install check with the ones that failed marked, the DLLs in the game folder
+with sizes and hashes, anything Windows Defender removed, and numbered steps to try. Paths are
+replaced with `%USERPROFILE%` and your account name with `<user>` before it is written. One file
+per card per day; the same failure is never written twice. Settings → **Error report on the
+Desktop → Write now** produces the same file on demand.
+
+
 **The game looks the same.** Check the game's `ReShade.log`. `nvngx_dlssnr.dll was not found`
 means the runtime is missing — click **Repair**. `evaluation succeeded` means neural rendering is
 running; the effect is subtle at default settings, so press `F5` in the ReShade RenoDX tab for

@@ -356,10 +356,34 @@ none of the test machine's games take that route. Now implemented and covered:
       bridge) and flags only duplicates and strangers
 - [x] G′3 Round-trip test: install on the feeder route, verify, restore to the original folder
 
+## J. Self-reporting (0.4.1)
+
+RTX 30 and RTX 40 are the cards this project cannot test on, so a failure there has to travel
+back by itself. When Refract detects that DLSS 5 did not work on a `patch`-tier card it writes a
+report onto the Desktop without being asked.
+
+- [x] J1 `src/core/errorreport.js`: decides whether a state is a failure (`failureOf`), renders the
+      report (`render`), writes/appends it (`write`) — pure, no Electron, unit-tested
+- [x] J2 Gate: only RTX 30/40 (`dlss5 === 'patch'`). RTX 50 works and RTX 20 is refused by design,
+      so neither writes a file
+- [x] J3 Triggers: a failed install verification, a thrown install, and a play session whose
+      ReShade log gives a bad verdict on a game Refract set up
+- [x] J4 Name carries the hardware: `Refract-error-NVIDIA-GeForce-RTX-3060-<YYYY-MM-DD>.log`
+- [x] J5 One file per card per day, appended, with a `#sig` line per block so the same failure
+      never writes twice
+- [x] J6 Contents: GPU/driver/Windows, game and route, the failure code and the log line, every
+      verification check, the DLLs that matter with sizes and hashes, antivirus findings, the
+      payload check, and numbered next steps per failure code
+- [x] J7 Paths reduced to `%USERPROFILE%` and the account name to `<user>` before writing
+- [x] J8 A full diagnostics zip lands beside it, once per card per day
+- [x] J9 Toast in the app naming the file, plus Settings → "Error report on the Desktop → Write now"
+- [x] J10 Unit tests (10) and a self-test check that the file appears, dedupes, and is skipped on
+      an RTX 50 machine
+
 ## H. Ship
 
 - [ ] H1 Update the support matrix in the app and README from verified results only
-- [ ] H2 Version 0.4.0, full unit + self-test pass, packaged and installed self-test pass
+- [x] H2 Version 0.4.1, full unit + self-test pass, packaged and installed self-test pass
 - [ ] H3 Byte-level restore check on every route before release **(T)**
 - [ ] H4 Private draft release with the installer; commit and push the source
 - [ ] H5 Write the results of every A/B cell back into this PRD so the next person sees the evidence

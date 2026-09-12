@@ -402,6 +402,7 @@
         'The game\'s own DLSS runtime is upgraded to 310.8 when it ships something older — an old DLSS is what leaves the add-on with an incomplete host state.',
         'Hook mode 1: the add-on also patches the game\'s Streamline modules, which is what the 1-Click reference ships for pre-Blackwell cards.',
         'The game is pointed at the discrete GPU, so a laptop cannot quietly run it on the iGPU.',
+        'If it still does not work, Refract writes an error report named after your card onto your Desktop, by itself, with the log line that explains why.',
       ],
       watch: [
         'Laptop cards have less VRAM: 6 GB on a 4050. Neural rendering may not fit alongside path tracing.',
@@ -417,6 +418,7 @@
         'The game\'s own DLSS runtime is upgraded to 310.8 when it is older.',
         'Hook mode 1, as on RTX 40.',
         'The game is pointed at the discrete GPU.',
+        'If it still does not work, Refract writes an error report named after your card onto your Desktop, by itself, with the log line that explains why.',
       ],
       watch: [
         'Antivirus: a modified NVIDIA runtime is the kind of file real-time protection quarantines seconds after it is written. If DLSS 5 vanishes, add the game folder as an exclusion and repair.',
@@ -930,6 +932,12 @@
     if (g && game() === g && state.tab === 'setup') renderDlss5(g);
     if (log && log.level === 'bad') Prism.toast('Neural rendering did not run', log.text, 'err');
   });
+  // Refract wrote a failure report by itself (RTX 30/40 only). Say where it went.
+  api.on('errorreport', ev => {
+    if (!ev || !ev.path) return;
+    Prism.toast('Error report saved to your Desktop',
+      `${ev.gpu || 'This card'}: ${ev.summary || ev.code}. The file is ${ev.path.split(/[\\/]/).pop()} — send it on.`, 'err');
+  });
 
   // ================================================================ first-run guide
   function renderGuideKey() {
@@ -944,6 +952,13 @@
     const g = game();
     const r = await call(api.exportDiagnostics, g ? g.id : null).catch(() => null);
     if (r) Prism.toast('Diagnostics saved', (g ? g.name + ': ' : '') + 'the zip is in your Downloads folder.');
+    b.disabled = false;
+  });
+  $('#writeErrorReport').addEventListener('click', async e => {
+    const b = e.currentTarget; b.disabled = true;
+    const g = game();
+    const r = await call(api.writeErrorReport, g ? g.id : null).catch(() => null);
+    if (r && r.path) Prism.toast('Error report on your Desktop', r.path.split(/[\\/]/).pop() + (r.written === false ? ' (this failure was already in it)' : ''));
     b.disabled = false;
   });
   Prism.seg($('#cardSeg'), v => { state.cardTab = Number(v); renderCards(); });
