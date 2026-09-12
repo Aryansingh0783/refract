@@ -210,6 +210,45 @@ async function run(ctx) {
     return { ok, detail: { verifyFailed: v.failed.map(f => f.id), quick, planActions: plan.actions, verdict: log.verdict, zipBytes: bundleOut.buffer.length, zip: bundleOut.name } };
   });
 
+  await check('Multi Frame Generation: payload, gating and the version.dll slot', async () => {
+    const mfgassets = require('./core/mfgassets');
+    const mfginstall = require('./core/mfginstall');
+    const mfgcfg = require('./core/mfgconfig');
+    const mfg = require('./core/mfg');
+    const bundle = require('./core/bundle');
+
+    // The engine and the Reflex pieces must be in the installer, each matching its pinned hash.
+    const missing = mfgassets.FILES.filter(f => !f.optional && !bundle.file(f.rel)).map(f => f.rel);
+    const enginePath = bundle.file(mfgassets.MFG_DLL_REL);
+    const engineOk = !!enginePath && bundle.sha256File(enginePath).startsWith(mfginstall.ENGINE_HASH);
+
+    // This machine is an RTX 50: MFG must be refused, because it has NVIDIA's own.
+    const here = mfg.eligible(ctx.gpu, { dx: 12, bitness: 64, apiLabel: 'DirectX 12' });
+    const refusedHere = ctx.gpu && ctx.gpu.series >= 50 ? (here.ok === false && here.code === 'rtx50') : true;
+
+    // An RTX 3060 with a DX12 game is eligible, and 3X writes MaxGeneratedFrames=2.
+    const amp = { name: 'RTX 3060', series: 30, arch: 'Ampere', dlss5: 'patch' };
+    const gate = mfg.eligible(amp, { dx: 12, bitness: 64 }, { platform: 'win32' });
+    const ini = mfgcfg.engineIni('', { gpu: amp, multiplier: 3, exact: true });
+    const cfgOk = /^MaxGeneratedFrames=2$/m.test(ini) && /^Router=SM86$/m.test(ini) && /^HardwareBilinear=0$/m.test(ini);
+
+    // The slot: a clean folder yields version.dll; a stranger there is refused, never overwritten.
+    const dir = path.join(os.tmpdir(), 'refract-selftest-mfg');
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true });
+    const free = mfginstall.slotFor(dir, { reshadeProxy: 'dxgi.dll' });
+    fs.writeFileSync(path.join(dir, 'version.dll'), 'SOMEONE ELSE');
+    const blocked = mfginstall.slotFor(dir, { reshadeProxy: 'dxgi.dll' });
+    const untouched = fs.readFileSync(path.join(dir, 'version.dll'), 'utf8') === 'SOMEONE ELSE';
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    const ok = !missing.length && engineOk && refusedHere && gate.ok && cfgOk
+      && free.ok && free.proxy === 'version.dll' && !blocked.ok && blocked.code === 'taken' && untouched;
+    return { ok, detail: { missing, engineOk, engine: mfgassets.ENGINE_VERSION, refusedHere,
+      hereReason: here.reason || null, ampereEligible: gate.ok, cfgOk,
+      slot: free.proxy || null, strangerRefused: blocked.code, strangerUntouched: untouched } };
+  });
+
   await check('RTX 30/40 failure writes a named error log on the Desktop', async () => {
     const errorreport = require('./core/errorreport');
     const desktop = path.join(os.tmpdir(), 'refract-selftest-desktop');

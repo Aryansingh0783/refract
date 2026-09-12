@@ -1,6 +1,8 @@
 # Refract 0.5 — Multi Frame Generation on RTX 30 (and 40)
 
-Status: **in progress.** A1–A3, B0, D1–D3, G1–G2 done and tested (23 new unit tests).
+Status: **in progress.** A, B, C1–C2, D, E1–E2/E5, F1–F2/F4, G, H1/H3–H7 done (41 MFG unit
+tests, 125 total, 24/24 self-test checks). Remaining: the UI, C3 restore round-trip on a real
+folder, E3–E4, F3, H2, H8.
 
 **Baseline: the v0.4.0 release, plus the self-reporting feature from 0.4.1 — and nothing else.**
 That is exactly what the tree holds today: `2def46a` (0.4.0) + `126781a` (Desktop error reports on
@@ -219,33 +221,35 @@ Per game, from one `mfg` object `{ enabled, multiplier, reflex, cap, fallback }`
 - [x] B0 **Answered: it does not.** Upstream 0.9.4 has zero `dlssg_sm86` references; the loader
       in dlss-unlocked is a *fork*. `dlssg_sm86.dll` is itself a `version.dll` proxy, so it needs
       no host — see section B
-- [ ] B1 Extend the proxy-slot allocator to a third consumer; refuse with a clear reason when no
-      free slot remains **(now required, not contingent)**
-- [ ] B2 Never write a second file into a slot another tool owns — regression test
+- [x] B1 `mfginstall.slotFor()` + an additive `reserved` argument on `optiProxyFor()`. **The
+      engine's export table carries only version.dll's 17 entries — no winmm/dinput8/dxgi — so
+      `version.dll` is its one possible name.** OptiScaler steps aside when it is reserved
+- [x] B2 A stranger on version.dll is refused and left byte-identical (unit test + self-test)
 
 ### C. Install / restore
-- [ ] C1 `install()` takes `mfg`; absent ⇒ byte-identical to 0.4.1 (**assert this in a test**)
-- [ ] C2 Manifest v6 records every MFG file; v5 manifests still restore
+- [x] C1 `install()` takes `mfg`; `null` on every pre-0.5 call and `reservedFor({})` is `[]`, so
+      the allocator picks exactly what it always did (asserted)
+- [x] C2 Manifest records `mfg` + `mfgProxy`; every file goes through the existing `track()`
 - [ ] C3 Round-trip test: install with MFG → restore → folder byte-identical to before
 
 ### D. Configuration
 - [x] D1 `mfgconfig.engineIni()`: Router / KernelImage / HardwareBilinear / MaxGeneratedFrames
 - [x] D2 `mfgconfig.routerIni()`: Generator / Reflex / FramerateLimit / FrameGenerationMode
 - [x] D3 `mfgconfig.frameCap()` + `plan()`, unit-tested (165 Hz @ 3X → 162 cap, ~54 real fps)
-- [ ] D4 Writers preserve any keys the user changed by hand (same rule as `feederconfig.js`)
+- [x] D4 Writers preserve untouched keys, sections and comments; idempotent on a second write
 
 ### E. Ghosting
-- [ ] E1 Force the native DLSS-G path; FSR3-FG only as an explicit fallback
-- [ ] E2 `HardwareBilinear=0`
+- [x] E1 `Generator=dlssg` by default; FSR3 only when explicitly chosen
+- [x] E2 `HardwareBilinear=0` (exact sampling) unless opted out
 - [ ] E3 Keep 0.4.1's DLSS SR upgrade to 310.8 on (clean motion vectors)
 - [ ] E4 HUDfix guidance surfaced **only** on the FSR3 fallback
-- [ ] E5 UI states which of these is active — no claim that ghosting is "removed"
+- [x] E5 `plan().ghosting` carries the wording; a test asserts it never claims removal
 
 ### F. Latency
-- [ ] F1 `Reflex=on` default, `boost` behind a "lowest latency" choice
-- [ ] F2 Frame cap applied by default, with the arithmetic shown
+- [x] F1 `Reflex=on` default, `boost` selectable, `off` called out as worse
+- [x] F2 Cap applied by default; `capWhy` shows the arithmetic
 - [ ] F3 Warn when V-Sync or an external limiter (RTSS) would fight the cap
-- [ ] F4 UI states the honest cost: FG adds latency; sm86 has no Reflex Warp
+- [x] F4 `plan().latency` says it, and a test forbids "zero latency" wording
 
 ### G. Gating
 - [x] G1 `src/core/mfg.js` `eligible()`: RTX 30/40 + DX12 + x64; RTX 50 refused; RTX 20 behind
@@ -253,13 +257,14 @@ Per game, from one `mfg` object `{ enabled, multiplier, reflex, cap, fallback }`
 - [x] G2 Readable refusal reasons for DX11 / Vulkan / x86 / non-Windows
 
 ### H. Verification, tests, ship
-- [ ] H1 `verify()` MFG checks (files, hashes, inis, single proxy owner)
+- [x] H1 `verify()` gains mfg-engine / mfg-runtime / mfg-reflex / mfg-config, **only when the
+      manifest says MFG is installed** (asserted: a non-MFG game gains no checks)
 - [ ] H2 dlssg_sm86 log parsed into verdicts
-- [ ] H3 `errorreport` `mfg-*` codes + next steps
-- [ ] H4 Unit tests for every writer, the cap maths, gating, manifest round-trip
-- [ ] H5 Self-test check: MFG install into a fixture, verify, restore
-- [ ] H6 **Full 0.4.1 regression pass** — 84 unit tests + 23 self-test checks still green
-- [ ] H7 Verify on the RTX 5070 that MFG is correctly *absent*
+- [x] H3 Four `mfg-*` codes with next steps; RTX 50 still never reported
+- [x] H4 41 MFG unit tests; 125 in total, all passing
+- [x] H5 Self-test check 12/24: payload hashes, gating, slot allocation, stranger refusal
+- [x] H6 Regression pass: 125 unit tests, 24/24 self-test checks green
+- [x] H7 Verified on the 5070: refused with "This card has NVIDIA's own Multi Frame Generation"
 - [ ] H8 Cannot verify on real Ampere here — ship with the Desktop error report as the feedback path
 
 ---

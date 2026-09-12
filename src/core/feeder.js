@@ -20,6 +20,9 @@ const fs = require('fs');
 const path = require('path');
 const rt = require('./reshaderuntime');
 const assets = require('./dlss5assets');
+const mfgassets = require('./mfgassets');
+const mfginstall = require('./mfginstall');
+const mfgcfg = require('./mfgconfig');
 const cfg = require('./feederconfig');
 const { proxyName } = require('./peimports');
 const peversion = require('./peversion');
@@ -148,8 +151,24 @@ function verify(exeDir, { gpu = null, unlock = null, route = null } = {}) {
   }
   add('conflicts', 'Only one DLSS add-on in this folder', !i.conflicts.length,
     i.conflicts.length ? `${i.conflicts.join(', ')} fight over the same NGX hooks.` : null);
+  // Multi Frame Generation, only when this folder actually has it — a game without MFG must not
+  // gain a failing check it never asked for.
+  const man = readManifest(exeDir);
+  if (man.mfg) {
+    const engine = path.join(exeDir, mfginstall.MFG_PROXY);
+    add('mfg-engine', `Frame-generation engine (${mfginstall.MFG_PROXY})`,
+      mfginstall.isOurEngine(exeDir, man),
+      fs.existsSync(engine) ? 'Present.' : `${mfginstall.MFG_PROXY} is missing — an antivirus may have removed it.`);
+    add('mfg-runtime', 'DLSS-G runtime', fs.existsSync(path.join(exeDir, 'nvngx_dlssg.dll')), 'nvngx_dlssg.dll');
+    add('mfg-reflex', 'Reflex (keeps added latency down)', fs.existsSync(path.join(exeDir, 'sl.reflex.dll')), 'sl.reflex.dll');
+    const eng = readText(path.join(exeDir, mfginstall.INI_NAME));
+    const want = mfgcfg.MULTIPLIERS[man.mfg.multiplier];
+    add('mfg-config', `Set to ${man.mfg.multiplier}X`,
+      new RegExp(`^MaxGeneratedFrames\\s*=\\s*${want}$`, 'm').test(eng) && new RegExp(`^Router\\s*=\\s*${man.mfg.router}$`, 'm').test(eng),
+      mfginstall.INI_NAME);
+  }
   const failed = checks.filter(c => !c.ok);
-  return { ok: !failed.length, checks, failed, route: r, nr, vanished,
+  return { ok: !failed.length, checks, failed, route: r, nr, vanished, mfg: man.mfg || null,
     summary: failed.length ? failed[0].detail || failed[0].label : 'Everything DLSS 5 needs is in place.' };
 }
 
@@ -317,7 +336,7 @@ async function writeInto(man, dest, text, kind) {
 }
 async function read(p) { try { return await fs.promises.readFile(p, 'utf8'); } catch { return ''; } }
 
-async function install(game, payload, { cacheRoot, onProgress, gpu = null, unlock = null, upgradeSr = true, hooks = null } = {}) {
+async function install(game, payload, { cacheRoot, onProgress, gpu = null, unlock = null, upgradeSr = true, hooks = null, mfg = null, refresh = null } = {}) {
   const exeDir = path.dirname(game.exe);
   const api = game.api || 'dxgi';
   const bitness = game.bitness || 64;
@@ -334,6 +353,12 @@ async function install(game, payload, { cacheRoot, onProgress, gpu = null, unloc
   }
   if (!payload.ok) throw new Error('Could not prepare the DLSS 5 components for the ' + route + ' route.');
 
+  // Multi Frame Generation, when asked for. Its engine is a version.dll proxy and can load under
+  // no other name, so the slot is settled BEFORE OptiScaler picks one. mfg stays null on every
+  // pre-0.5 call, and then nothing below this point behaves differently.
+  const wantMfg = !!(mfg && mfg.enabled);
+  const reserved = mfginstall.reservedFor({ mfg: wantMfg });
+
   // A repair/update extends the existing manifest so one restore still undoes everything.
   let man = null;
   try { man = JSON.parse(fs.readFileSync(path.join(exeDir, MANIFEST), 'utf8')); } catch {}
@@ -349,8 +374,9 @@ async function install(game, payload, { cacheRoot, onProgress, gpu = null, unloc
   // The bridge route replaces the upscaler instead of adding a ReShade pass, so it takes the
   // proxy slot itself and skips everything ReShade-shaped.
   if (route === 'optiscaler') {
-    await installOptiScaler(man, exeDir, payload, before);
+    await installOptiScaler(man, exeDir, payload, before, reserved);
     await provisionNr(man, exeDir, payload, { gpu, unlock, cacheRoot, onProgress });
+    if (wantMfg) await installMfg(man, exeDir, { mfg, gpu, refresh, before, cacheRoot, onProgress });
     await fs.promises.writeFile(path.join(exeDir, MANIFEST), JSON.stringify(man, null, 2));
     const checkedBridge = verify(exeDir, { gpu, unlock, route });
     return { ...status(exeDir), route, label: ROUTE_LABEL[route], notes: man.notes, verify: checkedBridge, ok: checkedBridge.ok };
@@ -387,6 +413,7 @@ async function install(game, payload, { cacheRoot, onProgress, gpu = null, unloc
 
   if (route !== 'feeder' && route !== 'optiscaler') await provisionDlssSr(man, exeDir, payload, { upgradeSr, onProgress });
   await provisionNr(man, exeDir, payload, { gpu, unlock, cacheRoot, onProgress });
+  if (wantMfg) await installMfg(man, exeDir, { mfg, gpu, refresh, before, cacheRoot, onProgress });
 
   await fs.promises.writeFile(path.join(exeDir, MANIFEST), JSON.stringify(man, null, 2));
   // Never report success on trust: read the folder back and check every part DLSS 5 needs.
@@ -523,11 +550,16 @@ function hooksFor(gpu) {
 // neural runtime has real DLSS work to attach to. OptiScaler is loaded as the game's proxy DLL;
 // when ReShade already owns dxgi.dll it takes winmm.dll instead, so the two never fight.
 const OPTI_PROXIES = ['dxgi.dll', 'winmm.dll', 'version.dll', 'dbghelp.dll'];
-function optiProxyFor(exeDir, before) {
+// `reserved` lets a caller hold a name back — Multi Frame Generation's engine is a version.dll
+// proxy and can load under no other name, so when MFG is wanted OptiScaler must take a different
+// one. Empty by default, so every pre-0.5 install picks exactly the name it always did.
+function optiProxyFor(exeDir, before, reserved = []) {
   const taken = new Set(listDir(exeDir).map(n => n.toLowerCase()));
   const reshade = (before.reshadeProxy || '').toLowerCase();
+  const held = new Set(reserved.map(n => String(n).toLowerCase()));
   for (const name of OPTI_PROXIES) {
     if (name === reshade) continue;           // never overwrite a working ReShade
+    if (held.has(name)) continue;             // held for another Refract component
     if (!taken.has(name)) return name;
   }
   return null;
@@ -552,8 +584,8 @@ function optiProxyInstalled(exeDir, man = {}) {
   return null;
 }
 
-async function installOptiScaler(man, exeDir, payload, before) {
-  const proxy = optiProxyFor(exeDir, before);
+async function installOptiScaler(man, exeDir, payload, before, reserved = []) {
+  const proxy = optiProxyFor(exeDir, before, reserved);
   if (!proxy) throw new Error('Every DLL name OptiScaler can load under is already taken in this folder. Move the extra proxy DLLs out and try again.');
   await copyVerified(man, payload.optiScaler, path.join(exeDir, proxy), 'optiscaler', null, 'OptiScaler');
   man.notes.push(`Installed the OptiScaler bridge ${payload.versions.optiscaler} as ${proxy}.`);
@@ -562,6 +594,36 @@ async function installOptiScaler(man, exeDir, payload, before) {
   await writeInto(man, path.join(exeDir, 'OptiScaler.ini'), cfg.optiScalerIni(), 'config');
   man.notes.push('Wrote OptiScaler.ini: the game\'s FSR/XeSS calls now go to DLSS.');
   man.optiProxy = proxy;
+}
+
+// Multi Frame Generation. Everything it needs sits beside the game: the engine under its only
+// valid proxy name, the DLSS-G runtime it serves, Reflex (the one real latency lever), and two
+// inis. Tracked in the same manifest as everything else, so one restore still undoes it all.
+async function installMfg(man, exeDir, { mfg, gpu, refresh, before, cacheRoot, onProgress }) {
+  const slot = mfginstall.slotFor(exeDir, { reshadeProxy: before && before.reshadeProxy, man });
+  if (!slot.ok) throw new Error(slot.reason);
+
+  const got = await mfgassets.ensureMfg(cacheRoot, onProgress);
+  const map = mfginstall.fileMap(exeDir, got.files);
+  for (const f of map) {
+    await copyVerified(man, f.src, f.dest, 'mfg', onProgress, path.basename(f.dest));
+  }
+
+  const p = mfgcfg.plan({ gpu, refresh, mfg });
+  await writeInto(man, path.join(exeDir, mfginstall.INI_NAME),
+    mfgcfg.engineIni(await read(path.join(exeDir, mfginstall.INI_NAME)),
+      { gpu, multiplier: p.multiplier, exact: p.exact }), 'config');
+  await writeInto(man, path.join(exeDir, 'nvngx.ini'),
+    mfgcfg.routerIni(await read(path.join(exeDir, 'nvngx.ini')),
+      { generator: p.generator, reflex: p.reflex, cap: p.cap }), 'config');
+
+  man.mfgProxy = mfginstall.MFG_PROXY;
+  man.mfg = { multiplier: p.multiplier, router: p.router, generator: p.generator,
+    reflex: p.reflex, cap: p.cap, exact: p.exact, engine: got.version };
+  man.notes.push(`Multi Frame Generation up to ${p.multiplier}X (${got.version}) installed as ${mfginstall.MFG_PROXY}.`);
+  man.notes.push(p.ghosting);
+  man.notes.push(p.latency);
+  if (p.cap) man.notes.push(p.capWhy);
 }
 
 // ReShade.ini: create a tuned one, or add only what is missing to the user's (backed up).
@@ -622,4 +684,4 @@ function status(exeDir) {
   } catch { return { installed: false }; }
 }
 
-module.exports = { install, restore, status, verify, quickCheck, srDecision, hooksFor, eligible, plan, inspect, routeFor, nrNeeded, nrState, ROUTE_LABEL, MANIFEST, ensurePayload: assets.ensurePayload };
+module.exports = { install, restore, status, verify, quickCheck, srDecision, hooksFor, eligible, plan, inspect, routeFor, nrNeeded, nrState, optiProxyFor, ROUTE_LABEL, MANIFEST, OPTI_PROXIES, ensurePayload: assets.ensurePayload };

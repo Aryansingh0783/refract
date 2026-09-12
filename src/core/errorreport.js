@@ -17,6 +17,9 @@ const crypto = require('crypto');
 // Log verdicts that mean "DLSS 5 did not run and it is not the user idling in a menu".
 const BAD_VERDICTS = new Set(['runtime-missing', 'arch-refused', 'host-state', 'addon-error',
   'limited-reshade', 'addon-missing']);
+// Multi Frame Generation failures, reported the same way and on the same cards.
+const MFG_VERDICTS = new Set(['mfg-engine-missing', 'mfg-slot-taken', 'mfg-not-running',
+  'mfg-arch-refused']);
 // Verdicts that are not failures: nothing ran yet, or the user simply has DLSS off.
 const QUIET_VERDICTS = new Set(['evaluating', 'idle', 'no-dlss', 'reshade-missing', 'unknown']);
 
@@ -51,6 +54,25 @@ const NEXT_STEPS = {
   'install-error': [
     'Close the game and any launcher that keeps its folder open, then try again.',
     'If the folder is under Program Files, run Refract as administrator once.',
+  ],
+  // Multi Frame Generation on RTX 30/40. Same rule as everything else here: only steps that
+  // exist, and no claim that frame generation can be made latency-free.
+  'mfg-engine-missing': [
+    'version.dll (the frame-generation engine) is not in the game folder. Press Repair in Refract.',
+    'If it keeps disappearing, exclude the game folder in Windows Security — a modified NVIDIA-adjacent DLL is exactly what real-time protection removes.',
+  ],
+  'mfg-slot-taken': [
+    'Another mod already owns version.dll in this game folder. The engine can only load under that name, so remove the other mod first.',
+    'If it is ReShade, reinstall it under dxgi.dll (Refract\'s default) and set the game up again.',
+  ],
+  'mfg-not-running': [
+    'Turn DLSS Frame Generation on in the game\'s own graphics settings — Refract only makes it available, the game still has to ask for it.',
+    'Frame generation needs DLSS Super Resolution or DLAA on as well.',
+    'Check dlssg_sm86\\logs next to the game: it records which architecture route was taken and whether the kernels loaded.',
+  ],
+  'mfg-arch-refused': [
+    'The engine refused this GPU. RTX 30 uses the SM86 route and RTX 20 the SM75 one; anything older cannot run it.',
+    'Update the NVIDIA driver — the PTX kernels are compiled by the driver at first run.',
   ],
 };
 
@@ -108,7 +130,7 @@ function failureOf({ gpu = null, verify = null, log = null, error = null, phase 
         : `Install verification failed: ${verify.summary || (first && first.label) || 'unknown check'}` };
   };
   const fromLog = () => {
-    if (!log || !BAD_VERDICTS.has(log.verdict)) return null;
+    if (!log || !(BAD_VERDICTS.has(log.verdict) || MFG_VERDICTS.has(log.verdict))) return null;
     return { code: log.verdict, phase: phase || 'session', level: 'bad',
       summary: log.text || `The game's ReShade log reports: ${log.verdict}` };
   };
@@ -138,7 +160,9 @@ function folderLines(inv) {
   if (!inv) return ['  (not inspected)'];
   if (inv.error) return [`  (could not read the folder: ${inv.error})`];
   const want = ['nvngx_dlssnr.dll', 'nvngx_dlss.dll', 'dxgi.dll', 'd3d11.dll', 'd3d12.dll',
-    'renodx-dlss5.addon64', 'dlss5-feed.addon64', 'dlss5-bridge.addon64', 'OptiScaler.dll', 'libxess.dll'];
+    'renodx-dlss5.addon64', 'dlss5-feed.addon64', 'dlss5-bridge.addon64', 'OptiScaler.dll', 'libxess.dll',
+    // Multi Frame Generation
+    'version.dll', 'nvngx_dlssg.dll', 'sl.reflex.dll', 'sl.pcl.dll'];
   const byName = new Map((inv.files || []).map(f => [f.name.toLowerCase(), f]));
   const lines = [];
   for (const n of want) {
@@ -243,4 +267,4 @@ function write(ctx = {}) {
 }
 
 module.exports = { write, render, failureOf, fileName, hardwareSlug, watched, sigOf,
-  BAD_VERDICTS, QUIET_VERDICTS, NEXT_STEPS };
+  BAD_VERDICTS, MFG_VERDICTS, QUIET_VERDICTS, NEXT_STEPS };
