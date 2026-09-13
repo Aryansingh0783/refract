@@ -21,6 +21,10 @@ const LOG_NAMES = /^ReShade(\d*)\.log$/i;
 const MAX_BYTES = 8 << 20; // tail only: these logs reach hundreds of MB with verbose add-ons
 
 const RULES = [
+  // The add-on hooking a Streamline the game itself uses, and only getting part-way in. Seen on
+  // an RTX 3060 in The Witcher 3 (DX12): slSetTag/slSetTagForFrame never hooked, the neural pass
+  // never ran, and the game crashed in-session. Hook mode 2 leaves that Streamline alone.
+  ['hook-partial', /Failed to find (slSetTagForFrame|slSetTag|slEvaluateFeature)/i],
   ['runtime-missing', /nvngx_dlssnr\.dll was not found/i],
   ['arch-refused', /Unsupported GPU architecture|FeatureNotSupported|0xBAD00001/i],
   ['host-state', /left host state incomplete;\s*skipping inline NR|skipping inline NR/i],
@@ -61,6 +65,8 @@ function parse(text) {
   else if (out.errors.find(e => e.verdict === 'runtime-missing')) pick(out, 'runtime-missing');
   else if (out.errors.find(e => e.verdict === 'arch-refused')) pick(out, 'arch-refused');
   else if (out.errors.find(e => e.verdict === 'host-state')) pick(out, 'host-state');
+  // Only a problem when nothing ever evaluated — a run that worked is not retro-diagnosed.
+  else if (out.errors.find(e => e.verdict === 'hook-partial')) pick(out, 'hook-partial');
   else if (out.errors.find(e => e.verdict === 'addon-error')) pick(out, 'addon-error');
   else if (out.limitedBuild) { out.verdict = 'limited-reshade'; out.line = lastLine(t, /limited add-on functionality/i); }
   else if (!out.addon) { out.verdict = 'addon-missing'; out.line = lastLine(t, /Searching for add-ons/i); }
@@ -130,6 +136,7 @@ const VERDICTS = {
   'arch-refused': { level: 'bad', text: 'The runtime refused this GPU. RTX 20 cards cannot run DLSS 5 neural rendering.', action: 'neural-screen' },
   'host-state': { level: 'bad', text: 'The add-on loaded but skipped the pass: the game\'s own DLSS state was not complete. Upgrading the game\'s DLSS runtime usually fixes this.', action: 'upgrade-dlss' },
   'addon-error': { level: 'bad', text: 'The add-on could not create the neural-rendering feature.', action: 'diagnostics' },
+  'hook-partial': { level: 'bad', text: 'The add-on only partly hooked the game\'s own Streamline, which is what makes these games crash. Repair the game — Refract now leaves a game\'s own Streamline alone.', action: 'repair' },
   'limited-reshade': { level: 'bad', text: 'This game has a ReShade build without add-on support, so the DLSS 5 add-on never loads.', action: 'repair' },
   'addon-missing': { level: 'bad', text: 'ReShade ran but the DLSS 5 add-on did not load.', action: 'repair' },
   'no-dlss': { level: 'warn', text: 'The game never asked for DLSS last run. Turn DLSS Super Resolution or DLAA on in its graphics settings.', action: null },

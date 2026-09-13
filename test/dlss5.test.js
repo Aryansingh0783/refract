@@ -116,7 +116,7 @@ test('competing DLSS add-ons in one folder are flagged as a conflict', () => {
   assert.deepStrictEqual(gate.inspect.conflicts.sort(), ['renodx-dlss.addon64', 'renodx-dlss5.addon64']);
   assert.ok(gate.warnings.length, 'a conflict warning is raised');
   assert.match(gate.warnings[0], /fight over the same NGX hooks/i);
-  assert.match(gate.reason, /2 DLSS add-ons are installed/i);
+  assert.match(gate.reason, /2 other DLSS add-ons are installed/i);
   // A stranger add-on that also drives DLSS counts too.
   fs.writeFileSync(path.join(dir, 'someones-dlss-thing.addon64'), 'X');
   assert.ok(feeder.plan(dir, { bitness: 64 }).inspect.conflicts.includes('someones-dlss-thing.addon64'));
@@ -663,7 +663,9 @@ test('the feeder route installs, verifies and restores (it used to throw)', asyn
   assert.strictEqual(fs.readFileSync(path.join(dir, 'sl.dlss.dll'), 'utf8'), 'SL-DLSS', 'and gets the ones it was missing');
   assert.match(fs.readFileSync(path.join(dir, 'ReShadePreset.ini'), 'utf8'), /DLSS5_Feed/);
   assert.match(fs.readFileSync(path.join(dir, 'dlss5-feed.cfg'), 'utf8'), /enabled=1/);
-  assert.match(fs.readFileSync(path.join(dir, 'ReShade.ini'), 'utf8'), /EnableHooks=1/, 'RTX 30 gets the Streamline-aware hook mode');
+  // This fixture has the game's own sl.common.dll, so even on an RTX 30 the add-on must stay out
+  // of that Streamline: hooking it half-way is what crashed The Witcher 3 on a 3060.
+  assert.match(fs.readFileSync(path.join(dir, 'ReShade.ini'), 'utf8'), /EnableHooks=2/, 'a game with its own Streamline is left alone');
   await feeder.restore(dir);
   assert.deepStrictEqual(fs.readdirSync(dir).sort(), before, 'restore leaves the folder as it was');
   fs.rmSync(base, { recursive: true, force: true });

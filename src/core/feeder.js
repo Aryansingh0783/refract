@@ -39,6 +39,8 @@ const ANY_ADDON = /\.addon(64|32)?$/i;
 // Add-ons that all try to drive DLSS. More than one at once is the documented conflict
 // behind "it's listed but does nothing": they fight over the same NGX hooks.
 const DLSS_ADDON = /(dlss|ngx)/i;
+// Files the DLSS 5 add-on generates for itself. Never a conflict, and cleaned up on restore.
+const OUR_ARTIFACT = /^dlss5-lab-overlay-[0-9a-f]+\.addon(64|32)?$/i;
 // What the game already has to upscale with. OptiScaler can turn any of these into DLSS calls.
 const FSR_FILE = /(^|[^a-z])fsr[23]|amd_fidelityfx|ffx_fsr/i;
 const XESS_FILE = /^libxess(_dx11|_fg)?\.dll$/i;
@@ -192,7 +194,10 @@ function inspect(exeDir) {
     conflicts: (() => {
       const renodx = names.filter(n => RENODX_ADDON.test(n));
       const feed = names.filter(n => FEED_ADDON.test(n));
-      const known = n => RENODX_ADDON.test(n) || FEED_ADDON.test(n) || BRIDGE_ADDON.test(n);
+      // The RenoDX DLSS 5 add-on drops its own hash-suffixed lab overlay next to itself at
+      // runtime. It is our add-on's byproduct, not a rival, and calling it a conflict made
+      // Refract refuse to install alongside a file it had created itself.
+      const known = n => RENODX_ADDON.test(n) || FEED_ADDON.test(n) || BRIDGE_ADDON.test(n) || OUR_ARTIFACT.test(n);
       const strangers = dlssAddons.filter(n => !known(n));
       const bad = [...(renodx.length > 1 ? renodx : []), ...(feed.length > 1 ? feed : []), ...strangers];
       return [...new Set(bad)];
@@ -232,7 +237,9 @@ function plan(exeDir, opts = {}) {
   const i = inspect(exeDir);
   const warnings = [];
   if (i.conflicts.length) {
-    warnings.push(`${i.conflicts.length} DLSS add-ons are installed here (${i.conflicts.join(', ')}). They fight over the same NGX hooks and unload each other — keep one and move the rest out.`);
+    warnings.push(i.conflicts.length === 1
+      ? `Another DLSS add-on is installed here (${i.conflicts[0]}). It and Refract's add-on fight over the same NGX hooks and unload each other — move that one out of the game folder.`
+      : `${i.conflicts.length} other DLSS add-ons are installed here (${i.conflicts.join(', ')}). They fight over the same NGX hooks and unload each other — keep one and move the rest out.`);
   }
   if (gpu && gpu.dlss5 === 'unsupported') {
     return { ok: false, route: null, actions: [], warnings, inspect: i,
@@ -344,7 +351,7 @@ async function install(game, payload, { cacheRoot, onProgress, gpu = null, unloc
 
   const gate = plan(exeDir, { bitness, api, dx, gpu, unlock });
   if (!gate.ok) throw new Error(gate.reason);
-  hooks = hooks === 1 || hooks === 2 ? hooks : hooksFor(gpu);
+  hooks = hooks === 1 || hooks === 2 ? hooks : hooksFor(gpu, exeDir);
   const before = gate.inspect;
   const route = gate.route;
 
@@ -368,7 +375,7 @@ async function install(game, payload, { cacheRoot, onProgress, gpu = null, unloc
       // the add-ons create at runtime (logs, a generated preset) when Refract installed ReShade.
       before: listDir(exeDir) };
   }
-  Object.assign(man, { version: 5, route, at: Date.now(), notes: [], hooks: hooks || hooksFor(gpu) });
+  Object.assign(man, { version: 5, route, at: Date.now(), notes: [], hooks: hooks || hooksFor(gpu, exeDir) });
   man.added = man.added || []; man.replaced = man.replaced || [];
 
   // The bridge route replaces the upscaler instead of adding a ReShade pass, so it takes the
@@ -541,9 +548,26 @@ async function installFeeder(man, exeDir, payload, before, hooks) {
 
 // Which hook mode suits this card by default. RTX 50 is verified on NGX-only hooks; on Ampere and
 // Ada the add-on has to reach the game's Streamline modules too, which is the mode 1-Click ships.
-function hooksFor(gpu) {
+// Hook mode. 1 = NGX plus the game's Streamline modules; 2 = NGX only.
+//
+// 1-Click uses mode 1 on pre-Blackwell cards, and that is right for a game with no Streamline of
+// its own. It is wrong — and crashes — for a game that ships a live Streamline stack it is
+// actively using for DLSS Frame Generation. The Witcher 3 (DX12) is exactly that case: an RTX
+// 3060 report showed the add-on hooking sl.common/sl.interposer, failing to find slSetTag and
+// slSetTagForFrame, and the game dying in-session with the neural pass never having run once.
+// Half-installed hooks in someone else's interposer is not a state to leave a game in.
+//
+// So the folder decides, and only then the card: if the game has its own Streamline, stay out of
+// it (mode 2). RTX 50 was always mode 2, so nothing about that path changes.
+const GAME_STREAMLINE = /^(sl\.interposer\.dll|sl\.common\.dll|nvngx_dlssg\.dll)$/i;
+function gameHasStreamline(exeDir) {
+  return listDir(exeDir).some(n => GAME_STREAMLINE.test(n));
+}
+function hooksFor(gpu, exeDir = null) {
   const tier = (gpu && gpu.dlss5) || 'unknown';
-  return tier === 'patch' ? 1 : 2;
+  if (tier !== 'patch') return 2;
+  if (exeDir && gameHasStreamline(exeDir)) return 2;
+  return 1;
 }
 
 // The OptiScaler bridge: the game's FSR 2/3 or XeSS calls are turned into DLSS calls, so the
@@ -648,7 +672,7 @@ async function writeIni(man, exeDir, { feeder, hooks = null }) {
 
 // Files ReShade and the DLSS 5 add-ons create while the game runs. Only removed on restore
 // when Refract installed ReShade itself and the file wasn't there before.
-const RUNTIME_ARTIFACT = /^(ReShade\.log\d*|ReShadePreset\.ini|ReShade\.ini\.tmp|renodx[^\\/]*\.(log|ini|json)|dlss5[^\\/]*\.(log|cfg))$/i;
+const RUNTIME_ARTIFACT = /^(ReShade\.log\d*|ReShadePreset\.ini|ReShade\.ini\.tmp|renodx[^\\/]*\.(log|ini|json)|dlss5[^\\/]*\.(log|cfg)|dlss5-lab-overlay-[0-9a-f]+\.addon(64|32)?)$/i;
 
 async function restore(exeDir) {
   const manPath = path.join(exeDir, MANIFEST);
@@ -694,4 +718,4 @@ function status(exeDir) {
   } catch { return { installed: false }; }
 }
 
-module.exports = { install, restore, status, verify, quickCheck, srDecision, hooksFor, eligible, plan, inspect, routeFor, nrNeeded, nrState, optiProxyFor, ROUTE_LABEL, MANIFEST, OPTI_PROXIES, ensurePayload: assets.ensurePayload };
+module.exports = { install, restore, status, verify, quickCheck, srDecision, hooksFor, eligible, plan, inspect, routeFor, nrNeeded, nrState, optiProxyFor, gameHasStreamline, ROUTE_LABEL, MANIFEST, OPTI_PROXIES, ensurePayload: assets.ensurePayload };

@@ -16,7 +16,7 @@ const crypto = require('crypto');
 
 // Log verdicts that mean "DLSS 5 did not run and it is not the user idling in a menu".
 const BAD_VERDICTS = new Set(['runtime-missing', 'arch-refused', 'host-state', 'addon-error',
-  'limited-reshade', 'addon-missing']);
+  'limited-reshade', 'addon-missing', 'hook-partial']);
 // Multi Frame Generation failures, reported the same way and on the same cards.
 const MFG_VERDICTS = new Set(['mfg-engine-missing', 'mfg-slot-taken', 'mfg-not-running',
   'mfg-arch-refused']);
@@ -36,6 +36,10 @@ const NEXT_STEPS = {
     'The add-on loaded but the game\'s own DLSS state was incomplete, so the pass was skipped.',
     'Turn on Refract → Settings → "Upgrade the game\'s DLSS runtime" and repair the game, then turn DLSS Super Resolution (not DLAA-off) on in the game.',
     'If the game uses FSR or XeSS rather than DLSS, set it to DLSS in its graphics menu.',
+  ],
+  'hook-partial': [
+    'Press Repair in Refract. Builds from 0.5.1 leave a game\'s own Streamline alone, which is what caused the crashes.',
+    'If it still crashes, the game folder has another DLSS or frame-generation mod in it — move that out and repair again.',
   ],
   'addon-error': [
     'The add-on could not create the neural-rendering feature. Update the NVIDIA driver, then repair the game.',
@@ -184,7 +188,7 @@ function render({ gpu = null, game = null, verify = null, log = null, failure, a
   L.push('');
   L.push('HARDWARE');
   L.push(`  ${pad('GPU')} ${gpu && gpu.name || 'unknown'}${gpu && gpu.memoryTotal ? ` (${Math.round(gpu.memoryTotal / 1024)} GB)` : ''}`);
-  L.push(`  ${pad('Driver')} ${gpu && gpu.driver || 'unknown'}${gpu && gpu.driverStatus ? ` (${gpu.driverStatus} than the tested driver)` : ''}`);
+  L.push(`  ${pad('Driver')} ${gpu && gpu.driver || 'unknown'}${gpu && gpu.driverStatus ? ` (${gpu.driverStatus === 'tested' ? 'the driver this was tested against' : gpu.driverStatus + ' than the tested driver'})` : ''}`);
   L.push(`  ${pad('Series')} ${gpu && gpu.series ? `RTX ${gpu.series}` : 'unknown'}${gpu && gpu.arch ? ` — ${gpu.arch}` : ''} — DLSS 5 tier: ${gpu && gpu.dlss5 || 'unknown'}`);
   L.push(`  ${pad('Windows')} ${os.release()} (${process.arch})`);
   L.push(`  ${pad('Memory')} ${Math.round(os.totalmem() / 1073741824)} GB`);
@@ -236,7 +240,9 @@ function render({ gpu = null, game = null, verify = null, log = null, failure, a
   const steps = NEXT_STEPS[failure.code] || NEXT_STEPS['install-failed'];
   steps.forEach((s, i) => L.push(`  ${i + 1}. ${s}`));
   L.push('');
-  L.push('This file was written automatically because DLSS 5 did not work on an RTX 30/40 card.');
+  L.push(failure.phase === 'manual'
+    ? 'This file was written because you asked for it in DIHLSS5 -> Settings.'
+    : 'This file was written automatically because DLSS 5 did not work on an RTX 30/40 card.');
   L.push('Send it (and the .zip beside it, if there is one) to the developer — paths have been');
   L.push('replaced with %USERPROFILE% and your Windows account name with <user>.');
   L.push(`#sig ${sigOf(failure, game)}`);

@@ -624,3 +624,99 @@ test('the two hosts can never disagree about the multiplier', () => {
     assert.equal(a, b, `${m}X disagrees: engine ${a}, optiscaler ${b}`);
   }
 });
+
+// ================================================================ field regressions (0.5.1)
+// Both of these came back from real machines running 0.5.0.
+const feederMod = require('../src/core/feeder');
+const rlog = require('../src/core/reshadelog');
+
+function dir(files = {}) {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-field-'));
+  for (const [n, b] of Object.entries(files)) fs.writeFileSync(path.join(d, n), b);
+  return d;
+}
+
+test('a game with its own Streamline is never hooked into — the RTX 3060 crash', () => {
+  // The Witcher 3 (DX12) ships a live Streamline stack it uses for DLSS Frame Generation.
+  // 0.5.0 set EnableHooks=1 on Ampere regardless, half-hooked it, and the game crashed.
+  const witcher = dir({ 'witcher3.exe': 'MZ', 'sl.interposer.dll': 'x', 'sl.common.dll': 'x',
+    'nvngx_dlssg.dll': 'x', 'sl.dlss_g.dll': 'x' });
+  assert.equal(feederMod.gameHasStreamline(witcher), true);
+  assert.equal(feederMod.hooksFor(AMPERE, witcher), 2, 'Ampere + the game\'s own Streamline => NGX only');
+  assert.equal(feederMod.hooksFor(ADA, witcher), 2);
+
+  // A game with no Streamline of its own still gets mode 1 on Ampere, as 1-Click does.
+  const plain = dir({ 'game.exe': 'MZ', 'nvngx_dlss.dll': 'x' });
+  assert.equal(feederMod.gameHasStreamline(plain), false);
+  assert.equal(feederMod.hooksFor(AMPERE, plain), 1);
+
+  // RTX 50 was always NGX-only and must not change either way.
+  assert.equal(feederMod.hooksFor(BLACKWELL, witcher), 2);
+  assert.equal(feederMod.hooksFor(BLACKWELL, plain), 2);
+
+  // Called without a folder it behaves exactly as 0.5.0 did.
+  assert.equal(feederMod.hooksFor(AMPERE), 1);
+  for (const d of [witcher, plain]) fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('the add-on\'s own lab overlay is not a competing mod', () => {
+  // 0.5.0 refused to install because it counted a file its own add-on had generated.
+  const d = dir({ 'game.exe': 'MZ', 'dxgi.dll': 'ReShade 6.8.0 Searching for add-ons',
+    'renodx-dlss5.addon64': 'x', 'dlss5-lab-overlay-ee44897f85b191a0.addon64': 'x' });
+  const i = feederMod.inspect(d);
+  assert.deepEqual(i.conflicts, [], 'our own artifact is not a conflict');
+  // A genuine stranger still is.
+  fs.writeFileSync(path.join(d, 'someone-elses-dlss.addon64'), 'x');
+  assert.deepEqual(feederMod.inspect(d).conflicts, ['someone-elses-dlss.addon64']);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('one competing add-on reads as one, not "1 DLSS add-ons"', () => {
+  const d = dir({ 'game.exe': 'MZ', 'dxgi.dll': 'ReShade 6.8.0 Searching for add-ons',
+    'renodx-dlss5.addon64': 'x', 'rival-dlss.addon64': 'x' });
+  const p = feederMod.plan(d, { bitness: 64, api: 'dxgi', dx: 12, gpu: AMPERE, unlock: { enabled: true } });
+  const w = (p.warnings || []).join(' ');
+  assert.match(w, /Another DLSS add-on is installed here/);
+  assert.doesNotMatch(w, /1 DLSS add-ons|1 other DLSS add-ons/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('a half-hooked Streamline is recognised in the log and points at Repair', () => {
+  // Lifted from the RTX 3060 report.
+  const log = [
+    "21:50:54:487 [14868] | ERROR | [DLSS 5 Neural Rendering] vtable::Hook(Failed to find slEvaluateFeature)",
+    "21:50:54:490 [14868] | ERROR | [DLSS 5 Neural Rendering] vtable::Hook(Failed to find slSetTag)",
+    "21:50:54:491 [14868] | ERROR | [DLSS 5 Neural Rendering] vtable::Hook(Failed to find slSetTagForFrame)",
+    "21:50:56:057 [14868] | INFO  | [DLSS 5 Neural Rendering] DLSS5 Generic: signed NR runtime (nvngx_dlssnr.dll) pre-loaded at device init",
+    "21:50:53:791 [14868] | INFO  | [DLSS 5 Neural Rendering] DLSS5 Generic: NGX module scan (loaded copies):",
+    '21:50:51:000 [1] | INFO  | Registered add-on "DLSS 5 Neural Rendering" v4.7 using ReShade API version 18.',
+  ].join('\n');
+  const r = rlog.parse(log);
+  assert.equal(r.verdict, 'hook-partial');
+  assert.equal(rlog.VERDICTS['hook-partial'].level, 'bad');
+  assert.equal(rlog.VERDICTS['hook-partial'].action, 'repair');
+  assert.match(rlog.VERDICTS['hook-partial'].text, /Streamline/);
+  assert.ok(er.NEXT_STEPS['hook-partial'].length, 'and it has next steps');
+});
+
+test('a run that actually evaluated is never retro-diagnosed as a hook failure', () => {
+  const log = [
+    "| ERROR | [DLSS 5 Neural Rendering] vtable::Hook(Failed to find slSetTagForFrame)",
+    "| INFO  | [DLSS 5 Neural Rendering] inline feature 18 evaluation succeeded (count=420)",
+  ].join('\n');
+  assert.equal(rlog.parse(log).verdict, 'evaluating');
+});
+
+test('a manual report does not claim it was written because something failed', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'refract-manual-'));
+  const text = er.render({
+    gpu: { name: 'RTX 3060', series: 30, dlss5: 'patch', driver: '616.92', driverStatus: 'tested' },
+    failure: { code: 'manual', phase: 'manual', level: 'warn', summary: 'No failure detected.' },
+  });
+  assert.match(text, /because you asked for it/);
+  assert.doesNotMatch(text, /written automatically because DLSS 5 did not work/);
+  // And the driver line reads like English.
+  assert.doesNotMatch(text, /tested than the tested driver/);
+  assert.match(text, /the driver this was tested against/);
+  fs.rmSync(d, { recursive: true, force: true });
+});

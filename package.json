@@ -1,7 +1,7 @@
 {
   "name": "dihlss5",
   "productName": "DIHLSS5",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "DLSS 5 companion: installs DLSS 5 (RenoDX) in-game or runs it screen-space (NeuralScreen) on RTX 30/40/50, with everything bundled.",
   "author": {
     "name": "Aryan",
